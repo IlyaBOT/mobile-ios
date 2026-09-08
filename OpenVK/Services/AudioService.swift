@@ -231,9 +231,10 @@ final class AudioService {
         ) { result in
             switch result {
             case .success(let response):
-                completion(.success((response.items ?? []).map {
-                    Self.mapTrack($0, fallbackOwnerID: nil, artworkURL: nil)
-                }))
+                let tracks = (response.items ?? [])
+                    .filter(Self.isValidCatalogItem)
+                    .map { Self.mapTrack($0, fallbackOwnerID: nil, artworkURL: nil) }
+                completion(.success(tracks))
             case .failure(let error):
                 completion(.failure(error))
             }
@@ -265,14 +266,25 @@ final class AudioService {
         ) { result in
             switch result {
             case .success(let response):
-                let tracks = (response.items ?? []).map {
-                    Self.mapTrack($0, fallbackOwnerID: nil, artworkURL: nil)
-                }
+                let tracks = (response.items ?? [])
+                    .filter(Self.isValidCatalogItem)
+                    .map { Self.mapTrack($0, fallbackOwnerID: nil, artworkURL: nil) }
                 completion(.success(Self.rankSearchResults(tracks, query: trimmed)))
             case .failure(let error):
                 completion(.failure(error))
             }
         }
+    }
+
+    private static func isValidCatalogItem(_ item: AudioItemDTO) -> Bool {
+        if item.ready == false || item.withdrawn == true {
+            return false
+        }
+
+        // OpenVK reports unprocessed/problematic audio as a ~1 second item.
+        // Such entries cannot be played normally and should not pollute
+        // Popular or global search results.
+        return (item.duration ?? 0) > 1
     }
 
     func setTrackAdded(
@@ -587,7 +599,14 @@ final class AudioCacheService {
     }
 
     func prefetch(_ tracks: [AudioTrack]) {
-        tracks.forEach { cache($0, completion: nil) }
+        guard !tracks.isEmpty else { return }
+
+        // cachedURL() touches the filesystem. Keep neighbor prefetching away
+        // from the main thread so queue/shuffle controls react immediately.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            tracks.forEach { self.cache($0, completion: nil) }
+        }
     }
 
     func totalCacheSizeBytes() -> Int64 {
@@ -966,11 +985,18 @@ final class AudioPlayerService: NSObject, ObservableObject {
         }
 
         if enabled, queue.count > 1 {
-            let history = Array(queue.prefix(index))
-            var remaining = Array(queue.suffix(from: min(queue.count, index + 1)))
-            remaining.shuffle()
-            queue = history + [current] + remaining
-            currentIndex = history.count
+            // Preserve playback history and the current item in-place.
+            // Only the still-unplayed tail is shuffled, which avoids rebuilding
+            // the whole queue and guarantees no repeats inside one shuffle pass.
+            let firstUpcomingIndex = index + 1
+            if firstUpcomingIndex < queue.count {
+                var updatedQueue = queue
+                var upcoming = Array(updatedQueue[firstUpcomingIndex...])
+                upcoming.shuffle()
+                updatedQueue.replaceSubrange(firstUpcomingIndex..<updatedQueue.count, with: upcoming)
+                queue = updatedQueue
+            }
+            currentIndex = index
         } else if !enabled, !sourceQueue.isEmpty {
             queue = sourceQueue
             currentIndex = queue.firstIndex(where: { isSameTrack($0, current) })

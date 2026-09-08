@@ -1031,48 +1031,56 @@ private struct ExpandedAudioPlayerControlsView: View {
                 .padding(.horizontal, 30)
                 .padding(.top, 18)
 
-                HStack(spacing: geometry.size.width < 350 ? 16 : 26) {
-                    Button(action: { membership.toggle(track) }) {
-                        Group {
-                            if membership.isPending(track) {
-                                ProgressView()
-                                    .scaleEffect(0.85)
-                            } else {
-                                Image(systemName: membership.isAdded(track) ? "checkmark" : "plus")
-                                    .font(.system(size: 24, weight: .semibold))
-                            }
+                ZStack {
+                    HStack(spacing: geometry.size.width < 350 ? 16 : 26) {
+                        Button(action: { player.previous() }) {
+                            Image(systemName: "backward.fill")
+                                .font(.system(size: 28))
+                                .frame(width: 46, height: 46)
                         }
-                        .frame(width: 44, height: 44)
-                    }
-                    .disabled(!membership.canMutate(track) || membership.isPending(track))
-                    .foregroundColor(membership.canMutate(track) ? .appAccent : .secondary)
 
-                    Button(action: { player.previous() }) {
-                        Image(systemName: "backward.fill")
-                            .font(.system(size: 28))
-                            .frame(width: 46, height: 46)
-                    }
-
-                    Button(action: { player.togglePlayPause() }) {
-                        Group {
-                            if player.isPreparing {
-                                ProgressView()
-                                    .scaleEffect(1.15)
-                            } else {
-                                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 34, weight: .semibold))
-                                    .offset(x: player.isPlaying ? 0 : 2)
+                        Button(action: { player.togglePlayPause() }) {
+                            Group {
+                                if player.isPreparing {
+                                    ProgressView()
+                                        .scaleEffect(1.15)
+                                } else {
+                                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                                        .font(.system(size: 34, weight: .semibold))
+                                        .offset(x: player.isPlaying ? 0 : 2)
+                                }
                             }
+                            .frame(width: 56, height: 56)
                         }
-                        .frame(width: 56, height: 56)
+
+                        Button(action: { player.next() }) {
+                            Image(systemName: "forward.fill")
+                                .font(.system(size: 28))
+                                .frame(width: 46, height: 46)
+                        }
                     }
 
-                    Button(action: { player.next() }) {
-                        Image(systemName: "forward.fill")
-                            .font(.system(size: 28))
-                            .frame(width: 46, height: 46)
+                    HStack {
+                        Button(action: { membership.toggle(track) }) {
+                            Group {
+                                if membership.isPending(track) {
+                                    ProgressView()
+                                        .scaleEffect(0.85)
+                                } else {
+                                    Image(systemName: membership.isAdded(track) ? "checkmark" : "plus")
+                                        .font(.system(size: 24, weight: .semibold))
+                                }
+                            }
+                            .frame(width: 44, height: 44)
+                        }
+                        .disabled(!membership.canMutate(track) || membership.isPending(track))
+                        .foregroundColor(membership.canMutate(track) ? .appAccent : .secondary)
+
+                        Spacer()
                     }
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
                 .buttonStyle(PlainButtonStyle())
                 .foregroundColor(.primary)
                 .padding(.top, 12)
