@@ -121,6 +121,7 @@ struct NewPostView: View {
             .background(Color(.systemBackground))
             .background(NewPostKeyboardDismissInstaller())
         }
+        .ignoresSafeArea(.container, edges: .bottom)
         .newPostSheetHeight(preferredSheetHeight)
         .sheet(isPresented: $showImagePicker) {
             MultiImagePicker(selectedData: $viewModel.selectedPhotosData)
@@ -295,17 +296,21 @@ private struct LegacyNewPostSheetConfigurator: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
 
     private final class SheetConfiguratorViewController: UIViewController {
+        private var hasConfigured = false
+
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            configureSheet()
+            configureSheetIfNeeded()
         }
 
         override func viewDidLayoutSubviews() {
             super.viewDidLayoutSubviews()
-            configureSheet()
+            configureSheetIfNeeded()
         }
 
-        private func configureSheet() {
+        private func configureSheetIfNeeded() {
+            guard !hasConfigured else { return }
+
             var controller: UIViewController = self
             while let parent = controller.parent {
                 controller = parent
@@ -315,10 +320,21 @@ private struct LegacyNewPostSheetConfigurator: UIViewControllerRepresentable {
                 return
             }
 
+            hasConfigured = true
             sheet.detents = [.medium(), .large()]
             sheet.selectedDetentIdentifier = .medium
             sheet.prefersGrabberVisible = true
             sheet.prefersScrollingExpandsWhenScrolledToEdge = true
+            enableInteractiveKeyboardDismiss(in: controller.view)
+        }
+
+        private func enableInteractiveKeyboardDismiss(in view: UIView) {
+            if let scrollView = view as? UIScrollView {
+                scrollView.keyboardDismissMode = .interactive
+            }
+            for subview in view.subviews {
+                enableInteractiveKeyboardDismiss(in: subview)
+            }
         }
     }
 }
@@ -327,6 +343,14 @@ private struct NewPostTopBar: View {
     let canPublish: Bool
     let onCancel: () -> Void
     let onPublish: () -> Void
+
+    private var isIOS26OrNewer: Bool {
+        if #available(iOS 26.0, *) {
+            return true
+        } else {
+            return false
+        }
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -343,8 +367,10 @@ private struct NewPostTopBar: View {
             }
             .disabled(!canPublish)
         }
-        .padding(.horizontal, 16)
-        .frame(height: 44)
+        .padding(.horizontal, isIOS26OrNewer ? 20 : 16)
+        .padding(.top, isIOS26OrNewer ? 20 : 0)
+        .padding(.bottom, isIOS26OrNewer ? 12 : 0)
+        .frame(height: isIOS26OrNewer ? nil : 44)
         .background(Color(.systemBackground))
     }
 }
@@ -418,31 +444,20 @@ private struct NewPostEditor: View {
     let height: CGFloat
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            CaretTrackingTextView(
-                text: $text,
-                isFocused: $isFocused
-            )
-            .frame(height: height)
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-
-            if text.isEmpty {
-                Text(L10n.NewPost.placeholder)
-                    .foregroundColor(Color(.placeholderText))
-                    .font(.system(size: 16))
-                    .padding(.top, 16)
-                    .padding(.leading, 18)
-                    .allowsHitTesting(false)
-            }
-        }
-        .padding(.top, 8)
+        CaretTrackingTextView(
+            text: $text,
+            isFocused: $isFocused,
+            placeholder: L10n.NewPost.placeholder
+        )
+        .frame(height: height)
+        .padding(.top, 4)
     }
 }
 
 private struct CaretTrackingTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
+    let placeholder: String
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
@@ -454,9 +469,27 @@ private struct CaretTrackingTextView: UIViewRepresentable {
         textView.isScrollEnabled = true
         textView.alwaysBounceVertical = true
         textView.keyboardDismissMode = .interactive
-        textView.textContainerInset = .zero
+        textView.textContainerInset = UIEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
         textView.textContainer.lineFragmentPadding = 0
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let label = UILabel()
+        label.text = placeholder
+        label.font = textView.font
+        label.textColor = .placeholderText
+        label.numberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+        textView.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: textView.trailingAnchor, constant: -16),
+            label.topAnchor.constraint(equalTo: textView.topAnchor, constant: 8),
+            label.bottomAnchor.constraint(lessThanOrEqualTo: textView.bottomAnchor, constant: -8)
+        ])
+        context.coordinator.placeholderLabel = label
+        label.isHidden = !text.isEmpty
+
         return textView
     }
 
@@ -469,15 +502,17 @@ private struct CaretTrackingTextView: UIViewRepresentable {
                 length: 0
             )
         }
+        context.coordinator.placeholderLabel?.isHidden = !text.isEmpty
 
-        if isFocused && !textView.isFirstResponder {
-            textView.becomeFirstResponder()
-        } else if !isFocused && textView.isFirstResponder {
-            textView.resignFirstResponder()
-        }
-
-        if textView.isFirstResponder {
-            context.coordinator.scrollCaretIntoView(textView, animated: false)
+        if isFocused {
+            if !context.coordinator.isResigning && !textView.isFirstResponder {
+                textView.becomeFirstResponder()
+            }
+        } else {
+            context.coordinator.isResigning = false
+            if textView.isFirstResponder {
+                textView.resignFirstResponder()
+            }
         }
     }
 
@@ -487,12 +522,16 @@ private struct CaretTrackingTextView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: CaretTrackingTextView
+        var placeholderLabel: UILabel?
+        var isResigning: Bool = false
 
         init(parent: CaretTrackingTextView) {
             self.parent = parent
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            isResigning = false
+            placeholderLabel?.isHidden = !textView.text.isEmpty
             if !parent.isFocused {
                 DispatchQueue.main.async {
                     self.parent.isFocused = true
@@ -502,6 +541,8 @@ private struct CaretTrackingTextView: UIViewRepresentable {
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            isResigning = true
+            placeholderLabel?.isHidden = !textView.text.isEmpty
             if parent.isFocused {
                 DispatchQueue.main.async {
                     self.parent.isFocused = false
@@ -511,6 +552,7 @@ private struct CaretTrackingTextView: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
+            placeholderLabel?.isHidden = !textView.text.isEmpty
             scrollCaretIntoView(textView, animated: false)
         }
 
@@ -566,8 +608,9 @@ private struct NewPostAttachmentsBar: View {
                 .padding(6)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
     }
 
     private func attachmentButton(icon: String, title: String) -> some View {
