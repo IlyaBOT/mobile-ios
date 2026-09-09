@@ -920,7 +920,7 @@ final class AudioPlayerService: NSObject, ObservableObject {
         deactivateAudioSession()
     }
 
-    func next(userInitiated: Bool = true) {
+    func next(userInitiated: Bool = true, loopAtEnd: Bool = false) {
         guard !queue.isEmpty, let index = currentIndex else { return }
 
         if !userInitiated && repeatMode == .one {
@@ -932,27 +932,29 @@ final class AudioPlayerService: NSObject, ObservableObject {
         let nextIndex = index + 1
         if nextIndex < queue.count {
             prepareAndPlay(index: nextIndex)
-        } else if repeatMode == .all {
+        } else if repeatMode == .all || loopAtEnd {
             prepareAndPlay(index: 0)
         } else {
             finishQueue()
         }
     }
 
-    func previous() {
+    func previous(forcePrevious: Bool = false) {
         guard !queue.isEmpty, let index = currentIndex else { return }
-        if currentTime > 4 {
+        if !forcePrevious && currentTime > 4 {
             seek(to: 0)
+            resume()
             return
         }
 
         let previousIndex = index - 1
         if previousIndex >= 0 {
             prepareAndPlay(index: previousIndex)
-        } else if repeatMode == .all {
-            prepareAndPlay(index: queue.count - 1)
+        } else if repeatMode == .all || forcePrevious {
+            prepareAndPlay(index: max(0, queue.count - 1))
         } else {
             seek(to: 0)
+            resume()
         }
     }
 

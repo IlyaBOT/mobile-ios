@@ -774,6 +774,7 @@ struct GlobalAudioPlayerOverlay: View {
                     bottomInset: bottomInset,
                     miniPlayerHeight: miniPlayerHeight,
                     isIOS26: isIOS26OrNewer,
+                    screenWidth: geometry.size.width,
                     onExpand: expandPlayer
                 )
                 .frame(width: geometry.size.width, height: geometry.size.height)
@@ -831,9 +832,13 @@ private struct AudioPlayerSheet: View {
     let bottomInset: CGFloat
     let miniPlayerHeight: CGFloat
     let isIOS26: Bool
+    var screenWidth: CGFloat = UIScreen.main.bounds.width
     let onExpand: () -> Void
 
     @ObservedObject private var player = AudioPlayerService.shared
+
+    @State private var horizontalDragOffset: CGFloat = 0
+    @State private var isSwitchingTrack: Bool = false
 
     private var progress: CGFloat {
         min(1, max(0, expansionProgress))
@@ -857,6 +862,48 @@ private struct AudioPlayerSheet: View {
         return (1 - progress) * maxMargin
     }
 
+    @ViewBuilder
+    private var miniPlayerCard: some View {
+        let current = player.currentTrack ?? track
+        if #available(iOS 26.0, *) {
+            ZStack(alignment: .bottom) {
+                MiniAudioPlayerView(track: current, isIOS26: true, height: miniPlayerHeight)
+
+                if player.duration > 0 {
+                    MiniPlayerProgressBar(
+                        duration: player.duration,
+                        currentTime: player.currentTime,
+                        isIOS26: true,
+                        cornerRadius: cardCornerRadius
+                    )
+                }
+            }
+            .frame(height: miniPlayerHeight)
+            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
+            .padding(.horizontal, cardHorizontalMargin)
+            .offset(x: horizontalDragOffset)
+        } else {
+            ZStack(alignment: .bottom) {
+                ClassicMiniPlayerBackground()
+
+                MiniAudioPlayerView(track: current, isIOS26: false, height: miniPlayerHeight)
+                    .offset(x: horizontalDragOffset)
+
+                if player.duration > 0 {
+                    MiniPlayerProgressBar(
+                        duration: player.duration,
+                        currentTime: player.currentTime,
+                        isIOS26: false,
+                        cornerRadius: cardCornerRadius
+                    )
+                }
+            }
+            .frame(height: miniPlayerHeight)
+            .padding(.horizontal, cardHorizontalMargin)
+            .clipped()
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .center) {
@@ -871,42 +918,9 @@ private struct AudioPlayerSheet: View {
                     .opacity(expandedOpacity)
 
                 if miniOpacity > 0.001 {
-                    if #available(iOS 26.0, *) {
-                        ZStack(alignment: .bottom) {
-                            MiniAudioPlayerView(track: track, isIOS26: true, height: miniPlayerHeight)
-
-                            if player.duration > 0 {
-                                MiniPlayerProgressBar(
-                                    duration: player.duration,
-                                    currentTime: player.currentTime,
-                                    isIOS26: true,
-                                    cornerRadius: cardCornerRadius
-                                )
-                            }
-                        }
-                        .frame(height: miniPlayerHeight)
-                        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
-                        .padding(.horizontal, cardHorizontalMargin)
+                    miniPlayerCard
                         .opacity(miniOpacity)
-                    } else {
-                        ZStack(alignment: .bottom) {
-                            ClassicMiniPlayerBackground()
-
-                            MiniAudioPlayerView(track: track, isIOS26: false, height: miniPlayerHeight)
-
-                            if player.duration > 0 {
-                                MiniPlayerProgressBar(
-                                    duration: player.duration,
-                                    currentTime: player.currentTime,
-                                    isIOS26: false,
-                                    cornerRadius: cardCornerRadius
-                                )
-                            }
-                        }
-                        .frame(height: miniPlayerHeight)
-                        .padding(.horizontal, cardHorizontalMargin)
-                        .opacity(miniOpacity)
-                    }
+                        .simultaneousGesture(horizontalSwipeGesture)
                 }
             }
             .frame(height: miniPlayerHeight)
@@ -917,7 +931,7 @@ private struct AudioPlayerSheet: View {
                 }
             }
 
-            ExpandedAudioPlayerView(track: track, bottomInset: bottomInset)
+            ExpandedAudioPlayerView(track: player.currentTrack ?? track, bottomInset: bottomInset)
                 .opacity(expandedOpacity)
                 .allowsHitTesting(progress > 0.96)
         }
@@ -926,6 +940,74 @@ private struct AudioPlayerSheet: View {
             Color(.systemBackground)
                 .opacity(expandedOpacity)
         )
+    }
+
+    private var horizontalSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                guard progress < 0.1, !isSwitchingTrack else { return }
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                horizontalDragOffset = value.translation.width
+            }
+            .onEnded { value in
+                guard progress < 0.1, !isSwitchingTrack else { return }
+                guard abs(value.translation.width) > abs(value.translation.height) else {
+                    withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.82)) {
+                        horizontalDragOffset = 0
+                    }
+                    return
+                }
+
+                let horizontal = value.translation.width
+                let predicted = value.predictedEndTranslation.width
+
+                if horizontal < -35 || predicted < -70 {
+                    triggerTrackSwitch(toNext: true)
+                } else if horizontal > 35 || predicted > 70 {
+                    triggerTrackSwitch(toNext: false)
+                } else {
+                    withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.82)) {
+                        horizontalDragOffset = 0
+                    }
+                }
+            }
+    }
+
+    private func triggerTrackSwitch(toNext: Bool) {
+        guard !isSwitchingTrack else { return }
+        isSwitchingTrack = true
+        HapticManager.impact(.medium)
+
+        let travelDistance = screenWidth > 0 ? screenWidth : 420
+        let exitOffset = toNext ? -travelDistance : travelDistance
+        let enterOffset = toNext ? travelDistance : -travelDistance
+
+        withAnimation(.easeOut(duration: 0.16)) {
+            horizontalDragOffset = exitOffset
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            if toNext {
+                player.next(loopAtEnd: true)
+            } else {
+                player.previous(forcePrevious: true)
+            }
+
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                horizontalDragOffset = enterOffset
+            }
+
+            DispatchQueue.main.async {
+                withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                    horizontalDragOffset = 0
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
+                    isSwitchingTrack = false
+                }
+            }
+        }
     }
 }
 
@@ -996,37 +1078,39 @@ private struct MiniAudioPlayerView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            let artworkSize: CGFloat = height - 16 // 36 pt when height is 52
-            let artworkRadius: CGFloat = isIOS26 ? 7 : 6
+            HStack(spacing: 10) {
+                let artworkSize: CGFloat = height - 16 // 36 pt when height is 52
+                let artworkRadius: CGFloat = isIOS26 ? 7 : 6
 
-            AudioArtworkView(urlString: track.artworkURL, cornerRadius: artworkRadius)
-                .frame(width: artworkSize, height: artworkSize)
-                .overlay(
-                    RoundedRectangle(cornerRadius: artworkRadius, style: .continuous)
-                        .stroke(
-                            isIOS26
-                                ? Color.white.opacity(0.18)
-                                : Color.clear,
-                            lineWidth: 0.5
-                        )
-                )
-                .shadow(
-                    color: isIOS26
-                        ? Color.black.opacity(0.18)
-                        : Color.black.opacity(0.08),
-                    radius: isIOS26 ? 3 : 2,
-                    y: isIOS26 ? 1.5 : 1
-                )
+                AudioArtworkView(urlString: track.artworkURL, cornerRadius: artworkRadius)
+                    .frame(width: artworkSize, height: artworkSize)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: artworkRadius, style: .continuous)
+                            .stroke(
+                                isIOS26
+                                    ? Color.white.opacity(0.18)
+                                    : Color.clear,
+                                lineWidth: 0.5
+                            )
+                    )
+                    .shadow(
+                        color: isIOS26
+                            ? Color.black.opacity(0.18)
+                            : Color.black.opacity(0.08),
+                        radius: isIOS26 ? 3 : 2,
+                        y: isIOS26 ? 1.5 : 1
+                    )
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(track.title)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                Text(track.artist)
-                    .font(.system(size: 11.5, weight: .regular))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(track.title)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Text(track.artist)
+                        .font(.system(size: 11.5, weight: .regular))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
             }
 
             Spacer(minLength: 6)
@@ -1049,7 +1133,7 @@ private struct MiniAudioPlayerView: View {
 
             Button(action: {
                 HapticManager.impact(.light)
-                player.next()
+                player.next(loopAtEnd: true)
             }) {
                 Image(systemName: "forward.fill")
                     .font(.system(size: isIOS26 ? 14 : 13, weight: .semibold))
@@ -1060,6 +1144,7 @@ private struct MiniAudioPlayerView: View {
         }
         .padding(.horizontal, isIOS26 ? 12 : 16)
         .frame(height: height)
+        .contentShape(Rectangle())
     }
 }
 
@@ -1163,7 +1248,7 @@ private struct ExpandedAudioPlayerControlsView: View {
 
                 ZStack {
                     HStack(spacing: geometry.size.width < 350 ? 16 : 26) {
-                        Button(action: { player.previous() }) {
+                        Button(action: { player.previous(forcePrevious: true) }) {
                             Image(systemName: "backward.fill")
                                 .font(.system(size: 28))
                                 .frame(width: 46, height: 46)
@@ -1183,7 +1268,7 @@ private struct ExpandedAudioPlayerControlsView: View {
                             .frame(width: 56, height: 56)
                         }
 
-                        Button(action: { player.next() }) {
+                        Button(action: { player.next(loopAtEnd: true) }) {
                             Image(systemName: "forward.fill")
                                 .font(.system(size: 28))
                                 .frame(width: 46, height: 46)
