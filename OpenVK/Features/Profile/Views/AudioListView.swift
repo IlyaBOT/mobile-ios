@@ -783,11 +783,13 @@ struct GlobalAudioPlayerOverlay: View {
                     miniPlayerHeight: miniPlayerHeight,
                     isIOS26: isIOS26OrNewer,
                     screenWidth: geometry.size.width,
-                    onExpand: expandPlayer
+                    dragOffset: $dragOffset,
+                    collapsedOffset: collapsedOffset,
+                    onExpand: expandPlayer,
+                    onCollapse: collapsePlayer
                 )
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .offset(y: sheetOffset)
-                .simultaneousGesture(playerDragGesture(collapsedOffset: collapsedOffset))
             }
         }
         .ignoresSafeArea()
@@ -802,35 +804,56 @@ struct GlobalAudioPlayerOverlay: View {
         }
     }
 
-    private func playerDragGesture(collapsedOffset: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 10)
-            .onChanged { value in
-                guard abs(value.translation.height) > abs(value.translation.width) else { return }
+    private func collapsePlayer() {
+        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+            dragOffset = 0
+            player.isExpanded = false
+        }
+    }
+}
 
-                if player.isExpanded {
-                    dragOffset = min(collapsedOffset, max(0, value.translation.height))
-                } else {
-                    dragOffset = max(-collapsedOffset, min(0, value.translation.height))
-                }
-            }
-            .onEnded { value in
-                let vertical = value.translation.height
-                let predicted = value.predictedEndTranslation.height
-                let isVertical = abs(vertical) > abs(value.translation.width)
+private struct PlayerDragDismissModifier: ViewModifier {
+    @ObservedObject private var player = AudioPlayerService.shared
+    @Binding var dragOffset: CGFloat
+    let collapsedOffset: CGFloat
 
-                withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
-                    if isVertical {
-                        if player.isExpanded {
-                            if vertical > 70 || predicted > 130 {
-                                player.isExpanded = false
-                            }
-                        } else if vertical < -45 || predicted < -90 {
-                            player.isExpanded = true
-                        }
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            DragGesture(minimumDistance: 10, coordinateSpace: .global)
+                .onChanged { value in
+                    guard abs(value.translation.height) > abs(value.translation.width) else { return }
+
+                    if player.isExpanded {
+                        dragOffset = min(collapsedOffset, max(0, value.translation.height))
+                    } else {
+                        dragOffset = max(-collapsedOffset, min(0, value.translation.height))
                     }
-                    dragOffset = 0
                 }
-            }
+                .onEnded { value in
+                    let vertical = value.translation.height
+                    let predicted = value.predictedEndTranslation.height
+                    let isVertical = abs(vertical) > abs(value.translation.width)
+
+                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+                        if isVertical {
+                            if player.isExpanded {
+                                if vertical > 70 || predicted > 130 {
+                                    player.isExpanded = false
+                                }
+                            } else if vertical < -45 || predicted < -90 {
+                                player.isExpanded = true
+                            }
+                        }
+                        dragOffset = 0
+                    }
+                }
+        )
+    }
+}
+
+extension View {
+    fileprivate func playerDragDismiss(dragOffset: Binding<CGFloat>, collapsedOffset: CGFloat) -> some View {
+        modifier(PlayerDragDismissModifier(dragOffset: dragOffset, collapsedOffset: collapsedOffset))
     }
 }
 
@@ -841,7 +864,10 @@ private struct AudioPlayerSheet: View {
     let miniPlayerHeight: CGFloat
     let isIOS26: Bool
     var screenWidth: CGFloat = UIScreen.main.bounds.width
+    @Binding var dragOffset: CGFloat
+    let collapsedOffset: CGFloat
     let onExpand: () -> Void
+    let onCollapse: () -> Void
 
     @ObservedObject private var player = AudioPlayerService.shared
 
@@ -956,15 +982,21 @@ private struct AudioPlayerSheet: View {
             }
             .frame(height: miniPlayerHeight)
             .contentShape(Rectangle())
+            .playerDragDismiss(dragOffset: $dragOffset, collapsedOffset: collapsedOffset)
             .onTapGesture {
                 if progress < 0.5 {
                     onExpand()
                 }
             }
 
-            ExpandedAudioPlayerView(track: player.currentTrack ?? track, bottomInset: bottomInset)
+            ExpandedAudioPlayerView(
+                track: player.currentTrack ?? track,
+                bottomInset: bottomInset,
+                dragOffset: $dragOffset,
+                collapsedOffset: collapsedOffset
+            )
                 .opacity(expandedOpacity)
-                .allowsHitTesting(progress > 0.96)
+                .allowsHitTesting(player.isExpanded)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
@@ -974,7 +1006,7 @@ private struct AudioPlayerSheet: View {
     }
 
     private var horizontalSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 12)
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
             .onChanged { value in
                 guard progress < 0.1, !isSwitchingTrack else { return }
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
@@ -1182,42 +1214,140 @@ private struct MiniAudioPlayerView: View {
 private struct ExpandedAudioPlayerView: View {
     let track: AudioTrack
     let bottomInset: CGFloat
+    @Binding var dragOffset: CGFloat
+    let collapsedOffset: CGFloat
+
     @State private var selectedPage = 0
+    @State private var horizontalDragOffset: CGFloat = 0
+    @State private var dragAxis: DragAxis = .none
+
+    private enum DragAxis {
+        case none
+        case horizontal
+        case vertical
+    }
 
     private var showQueue: Bool {
         selectedPage == 1
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // The player is the first page and the queue is physically to its right.
-            // Native paging keeps both pages exactly screen-sized and gives the expected
-            // gesture: swipe left on the player to reveal the queue, swipe right to return.
-            TabView(selection: $selectedPage) {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let height = geometry.size.height
+
+            ZStack(alignment: .bottom) {
+                // Page 0: Controls
                 ExpandedAudioPlayerControlsView(track: track)
-                    .tag(0)
+                    .frame(width: width, height: height)
+                    .offset(x: selectedPage == 0 ? horizontalDragOffset : -width + horizontalDragOffset)
+                    .gesture(page0Gesture(width: width))
 
-                AudioPlaybackQueueView()
-                    .tag(1)
+                // Page 1: Queue
+                AudioPlaybackQueueView(
+                    dragOffset: $dragOffset,
+                    collapsedOffset: collapsedOffset,
+                    horizontalDragOffset: $horizontalDragOffset,
+                    selectedPage: $selectedPage,
+                    screenWidth: width
+                )
+                .frame(width: width, height: height)
+                .offset(x: selectedPage == 1 ? horizontalDragOffset : width + horizontalDragOffset)
+                .allowsHitTesting(selectedPage == 1)
+
+                AudioPlayerBottomBar(
+                    showQueue: showQueue,
+                    bottomInset: bottomInset,
+                    selectPlayer: { selectPage(0) },
+                    selectQueue: { selectPage(1) }
+                )
+                .playerDragDismiss(dragOffset: $dragOffset, collapsedOffset: collapsedOffset)
             }
-            .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
-            .indexViewStyle(PageIndexViewStyle(backgroundDisplayMode: .never))
-
-            AudioPlayerBottomBar(
-                showQueue: showQueue,
-                bottomInset: bottomInset,
-                selectPlayer: { selectPage(0) },
-                selectQueue: { selectPage(1) }
-            )
+            .clipped()
+            .background(Color(.systemBackground))
         }
-        .clipped()
-        .background(Color(.systemBackground))
     }
 
     private func selectPage(_ page: Int) {
-        withAnimation(.easeInOut(duration: 0.24)) {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
             selectedPage = page
+            horizontalDragOffset = 0
         }
+    }
+
+    private func page0Gesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .global)
+            .onChanged { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+
+                if dragAxis == .none {
+                    if abs(dx) > abs(dy) {
+                        dragAxis = .horizontal
+                    } else if dy > 0 {
+                        dragAxis = .vertical
+                    }
+                }
+
+                switch dragAxis {
+                case .horizontal:
+                    if dx < 0 {
+                        horizontalDragOffset = max(-width, dx)
+                    } else {
+                        horizontalDragOffset = min(30, dx * 0.2)
+                    }
+                    dragOffset = 0
+                case .vertical:
+                    if dy > 0 {
+                        dragOffset = min(collapsedOffset, dy)
+                    } else {
+                        dragOffset = max(-20, dy * 0.2)
+                    }
+                    horizontalDragOffset = 0
+                case .none:
+                    break
+                }
+            }
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                let predictedX = value.predictedEndTranslation.width
+                let predictedY = value.predictedEndTranslation.height
+                let activeAxis = dragAxis
+                dragAxis = .none
+
+                switch activeAxis {
+                case .horizontal:
+                    if dx < -45 || predictedX < -90 {
+                        HapticManager.impact(.light)
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                            selectedPage = 1
+                            horizontalDragOffset = 0
+                        }
+                    } else {
+                        withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                            horizontalDragOffset = 0
+                        }
+                    }
+                case .vertical:
+                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+                        if dy > 70 || predictedY > 130 {
+                            AudioPlayerService.shared.isExpanded = false
+                        }
+                        dragOffset = 0
+                    }
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                        horizontalDragOffset = 0
+                    }
+                case .none:
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                        horizontalDragOffset = 0
+                    }
+                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+                        dragOffset = 0
+                    }
+                }
+            }
     }
 }
 
@@ -1225,6 +1355,10 @@ private struct ExpandedAudioPlayerControlsView: View {
     let track: AudioTrack
     @ObservedObject private var player = AudioPlayerService.shared
     @ObservedObject private var membership = AudioLibraryMembership.shared
+
+    private var currentTrack: AudioTrack {
+        player.currentTrack ?? track
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -1236,20 +1370,20 @@ private struct ExpandedAudioPlayerControlsView: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 8)
 
-                AudioArtworkView(urlString: track.artworkURL, cornerRadius: 16)
+                AudioArtworkView(urlString: currentTrack.artworkURL, cornerRadius: 16)
                     .frame(width: artworkSize, height: artworkSize)
                     .shadow(color: Color.black.opacity(0.14), radius: 14, y: 7)
 
                 Spacer(minLength: 14)
 
                 VStack(spacing: 4) {
-                    Text(track.title)
+                    Text(currentTrack.title)
                         .font(.system(size: 22, weight: .bold))
                         .foregroundColor(.primary)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
 
-                    Text(track.artist)
+                    Text(currentTrack.artist)
                         .font(.system(size: 17))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
@@ -1307,20 +1441,20 @@ private struct ExpandedAudioPlayerControlsView: View {
                     }
 
                     HStack {
-                        Button(action: { membership.toggle(track) }) {
+                        Button(action: { membership.toggle(currentTrack) }) {
                             Group {
-                                if membership.isPending(track) {
+                                if membership.isPending(currentTrack) {
                                     ProgressView()
                                         .scaleEffect(0.85)
                                 } else {
-                                    Image(systemName: membership.isAdded(track) ? "checkmark" : "plus")
+                                    Image(systemName: membership.isAdded(currentTrack) ? "checkmark" : "plus")
                                         .font(.system(size: 24, weight: .semibold))
                                 }
                             }
                             .frame(width: 44, height: 44)
                         }
-                        .disabled(!membership.canMutate(track) || membership.isPending(track))
-                        .foregroundColor(membership.canMutate(track) ? .appAccent : .secondary)
+                        .disabled(!membership.canMutate(currentTrack) || membership.isPending(currentTrack))
+                        .foregroundColor(membership.canMutate(currentTrack) ? .appAccent : .secondary)
 
                         Spacer()
                     }
@@ -1334,6 +1468,7 @@ private struct ExpandedAudioPlayerControlsView: View {
                 Spacer(minLength: 82)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
+            .contentShape(Rectangle())
         }
     }
 
@@ -1346,6 +1481,19 @@ private struct ExpandedAudioPlayerControlsView: View {
 
 private struct AudioPlaybackQueueView: View {
     @ObservedObject private var player = AudioPlayerService.shared
+    @Binding var dragOffset: CGFloat
+    let collapsedOffset: CGFloat
+    @Binding var horizontalDragOffset: CGFloat
+    @Binding var selectedPage: Int
+    let screenWidth: CGFloat
+
+    @State private var queueDragAxis: DragAxis = .none
+
+    private enum DragAxis {
+        case none
+        case horizontal
+        case vertical
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1360,6 +1508,9 @@ private struct AudioPlaybackQueueView: View {
             .padding(.horizontal, 20)
             .padding(.top, 18)
             .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .gesture(queueHeaderGesture)
 
             if player.upcomingQueue.isEmpty {
                 VStack(spacing: 10) {
@@ -1371,41 +1522,42 @@ private struct AudioPlaybackQueueView: View {
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(queueHeaderGesture)
                 .padding(.bottom, 76)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(player.upcomingQueue) { entry in
-                            Button(action: {
+                        ForEach(player.upcomingQueue.prefix(150)) { entry in
+                            HStack(spacing: 12) {
+                                AudioArtworkView(urlString: entry.track.artworkURL, cornerRadius: 8)
+                                    .frame(width: 48, height: 48)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.track.title)
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(.primary)
+                                        .lineLimit(1)
+                                    Text(entry.track.artist)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer(minLength: 8)
+
+                                Text(entry.track.duration)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 7)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                guard horizontalDragOffset == 0 else { return }
                                 HapticManager.impact(.light)
                                 player.playQueueItem(at: entry.queueIndex)
-                            }) {
-                                HStack(spacing: 12) {
-                                    AudioArtworkView(urlString: entry.track.artworkURL, cornerRadius: 8)
-                                        .frame(width: 48, height: 48)
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(entry.track.title)
-                                            .font(.system(size: 15, weight: .semibold))
-                                            .foregroundColor(.primary)
-                                            .lineLimit(1)
-                                        Text(entry.track.artist)
-                                            .font(.system(size: 13))
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                    }
-
-                                    Spacer(minLength: 8)
-
-                                    Text(entry.track.duration)
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 7)
-                                .contentShape(Rectangle())
                             }
-                            .buttonStyle(PlainButtonStyle())
 
                             SectionSeparator()
                                 .padding(.leading, 80)
@@ -1413,9 +1565,159 @@ private struct AudioPlaybackQueueView: View {
                     }
                     .padding(.bottom, 86)
                 }
+                .simultaneousGesture(queueSwipeBackGesture)
+                .overlay(
+                    Color.clear
+                        .frame(width: 48)
+                        .contentShape(Rectangle())
+                        .gesture(queueLeadingEdgeGesture),
+                    alignment: .leading
+                )
             }
         }
         .background(Color(.systemBackground))
+    }
+
+    private var queueSwipeBackGesture: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
+            .onChanged { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+
+                guard abs(dx) > abs(dy) else { return }
+
+                if dx > 0 {
+                    horizontalDragOffset = min(screenWidth, dx)
+                } else {
+                    horizontalDragOffset = max(-30, dx * 0.2)
+                }
+                dragOffset = 0
+            }
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                let predictedX = value.predictedEndTranslation.width
+
+                guard abs(dx) > abs(dy) else {
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                        horizontalDragOffset = 0
+                    }
+                    return
+                }
+
+                if dx > 40 || predictedX > 80 {
+                    HapticManager.impact(.light)
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                        selectedPage = 0
+                        horizontalDragOffset = 0
+                    }
+                } else {
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                        horizontalDragOffset = 0
+                    }
+                }
+            }
+    }
+
+    private var queueHeaderGesture: some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .global)
+            .onChanged { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+
+                if queueDragAxis == .none {
+                    if abs(dx) > abs(dy) {
+                        queueDragAxis = .horizontal
+                    } else if dy > 0 {
+                        queueDragAxis = .vertical
+                    }
+                }
+
+                switch queueDragAxis {
+                case .horizontal:
+                    if dx > 0 {
+                        horizontalDragOffset = min(screenWidth, dx)
+                    } else {
+                        horizontalDragOffset = max(-30, dx * 0.2)
+                    }
+                    dragOffset = 0
+                case .vertical:
+                    if dy > 0 {
+                        dragOffset = min(collapsedOffset, dy)
+                    } else {
+                        dragOffset = max(-20, dy * 0.2)
+                    }
+                    horizontalDragOffset = 0
+                case .none:
+                    break
+                }
+            }
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                let predictedX = value.predictedEndTranslation.width
+                let predictedY = value.predictedEndTranslation.height
+                let activeAxis = queueDragAxis
+                queueDragAxis = .none
+
+                switch activeAxis {
+                case .horizontal:
+                    if dx > 45 || predictedX > 90 {
+                        HapticManager.impact(.light)
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                            selectedPage = 0
+                            horizontalDragOffset = 0
+                        }
+                    } else {
+                        withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                            horizontalDragOffset = 0
+                        }
+                    }
+                case .vertical:
+                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+                        if dy > 70 || predictedY > 130 {
+                            player.isExpanded = false
+                        }
+                        dragOffset = 0
+                    }
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                        horizontalDragOffset = 0
+                    }
+                case .none:
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                        horizontalDragOffset = 0
+                    }
+                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.88)) {
+                        dragOffset = 0
+                    }
+                }
+            }
+    }
+
+    private var queueLeadingEdgeGesture: some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .global)
+            .onChanged { value in
+                let dx = value.translation.width
+                if dx > 0 {
+                    horizontalDragOffset = min(screenWidth, dx)
+                }
+            }
+            .onEnded { value in
+                let dx = value.translation.width
+                let predictedX = value.predictedEndTranslation.width
+
+                if dx > 40 || predictedX > 80 {
+                    HapticManager.impact(.light)
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                        selectedPage = 0
+                        horizontalDragOffset = 0
+                    }
+                } else {
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                        horizontalDragOffset = 0
+                    }
+                }
+            }
     }
 }
 

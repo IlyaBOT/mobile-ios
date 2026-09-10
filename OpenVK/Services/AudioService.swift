@@ -788,8 +788,8 @@ struct AudioQueueEntry: Identifiable {
     let queueIndex: Int
     let track: AudioTrack
 
-    var id: String {
-        "\(queueIndex)-\(track.id.uuidString)"
+    var id: Int {
+        queueIndex
     }
 }
 
@@ -817,7 +817,8 @@ final class AudioPlayerService: NSObject, ObservableObject {
             indices.append(contentsOf: 0..<index)
         }
 
-        return indices.map { AudioQueueEntry(queueIndex: $0, track: queue[$0]) }
+        let slice = indices.prefix(150)
+        return slice.map { AudioQueueEntry(queueIndex: $0, track: queue[$0]) }
     }
 
     private let player = AVPlayer()
