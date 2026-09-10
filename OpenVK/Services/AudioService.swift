@@ -400,6 +400,29 @@ final class AudioService {
         let remainder = seconds % 60
         return String(format: "%d:%02d", minutes, remainder)
     }
+
+    static func sanitizeArtworkURL(_ string: String?) -> String? {
+        guard var raw = string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        if raw.hasPrefix("//") {
+            raw = "https:" + raw
+        }
+        let lower = raw.lowercased()
+        if lower.contains("song.jpg") ||
+           lower.contains("camera_200") ||
+           lower.hasPrefix("/assets/") ||
+           lower.contains("packages/static") {
+            return nil
+        }
+        guard let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        return raw
+    }
 }
 
 private struct AudioItemsResponse: Decodable {
@@ -481,6 +504,7 @@ private struct AudioPlaylistDTO: Decodable {
         case ownerIDCamel = "ownerId"
         case coverURL = "cover_url"
         case coverURLCamel = "coverUrl"
+        case thumb, photo
     }
 
     init(from decoder: Decoder) throws {
@@ -491,7 +515,36 @@ private struct AudioPlaylistDTO: Decodable {
         description = try? c.decode(String.self, forKey: .description)
         size = try? c.decode(Int.self, forKey: .size)
         length = try? c.decode(Int.self, forKey: .length)
-        coverURL = (try? c.decode(String.self, forKey: .coverURL)) ?? (try? c.decode(String.self, forKey: .coverURLCamel))
+
+        let rawCover = (try? c.decode(String.self, forKey: .coverURL)) ?? (try? c.decode(String.self, forKey: .coverURLCamel))
+        let thumbCover = (try? c.decode(AudioPlaylistThumbDTO.self, forKey: .thumb))?.bestPhotoURL
+            ?? (try? c.decode(AudioPlaylistThumbDTO.self, forKey: .photo))?.bestPhotoURL
+            ?? (try? c.decode(String.self, forKey: .photo))
+        coverURL = AudioService.sanitizeArtworkURL(rawCover) ?? AudioService.sanitizeArtworkURL(thumbCover)
+    }
+}
+
+private struct AudioPlaylistThumbDTO: Decodable {
+    let photo34: String?
+    let photo68: String?
+    let photo135: String?
+    let photo270: String?
+    let photo300: String?
+    let photo600: String?
+    let photo1200: String?
+
+    enum CodingKeys: String, CodingKey {
+        case photo34 = "photo_34"
+        case photo68 = "photo_68"
+        case photo135 = "photo_135"
+        case photo270 = "photo_270"
+        case photo300 = "photo_300"
+        case photo600 = "photo_600"
+        case photo1200 = "photo_1200"
+    }
+
+    var bestPhotoURL: String? {
+        photo600 ?? photo300 ?? photo270 ?? photo1200 ?? photo135 ?? photo68 ?? photo34
     }
 }
 
@@ -1281,8 +1334,8 @@ final class AudioPlayerService: NSObject, ObservableObject {
         artworkTask = nil
 
         guard let artworkURL = track.artworkURL,
-              let url = URL(string: artworkURL),
-              !artworkURL.isEmpty else { return }
+              let sanitized = AudioService.sanitizeArtworkURL(artworkURL),
+              let url = URL(string: sanitized) else { return }
 
         let key = trackKey(track)
         artworkTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in

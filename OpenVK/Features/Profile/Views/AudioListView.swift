@@ -652,12 +652,19 @@ struct AudioArtworkView: View {
     let urlString: String?
     var cornerRadius: CGFloat = 10
 
+    private var validURL: URL? {
+        guard let sanitized = AudioService.sanitizeArtworkURL(urlString) else {
+            return nil
+        }
+        return URL(string: sanitized)
+    }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
 
-            if let raw = urlString, let url = URL(string: raw) {
+            if let url = validURL {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
