@@ -740,11 +740,12 @@ struct GlobalAudioPlayerOverlay: View {
     private let tabBarBaseHeight: CGFloat = 49
 
     private var isIOS26OrNewer: Bool {
+#if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             return true
-        } else {
-            return ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
         }
+#endif
+        return false
     }
 
     var body: some View {
@@ -865,9 +866,15 @@ private struct AudioPlayerSheet: View {
     @ViewBuilder
     private var miniPlayerCard: some View {
         let current = player.currentTrack ?? track
+
+#if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             ZStack(alignment: .bottom) {
-                MiniAudioPlayerView(track: current, isIOS26: true, height: miniPlayerHeight)
+                MiniAudioPlayerView(
+                    track: current,
+                    isIOS26: true,
+                    height: miniPlayerHeight
+                )
 
                 if player.duration > 0 {
                     MiniPlayerProgressBar(
@@ -879,29 +886,46 @@ private struct AudioPlayerSheet: View {
                 }
             }
             .frame(height: miniPlayerHeight)
-            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
+            .glassEffect(
+                .regular.interactive(),
+                in: RoundedRectangle(
+                    cornerRadius: cardCornerRadius,
+                    style: .continuous
+                )
+            )
             .padding(.horizontal, cardHorizontalMargin)
             .offset(x: horizontalDragOffset)
         } else {
-            ZStack(alignment: .bottom) {
-                ClassicMiniPlayerBackground()
-
-                MiniAudioPlayerView(track: current, isIOS26: false, height: miniPlayerHeight)
-                    .offset(x: horizontalDragOffset)
-
-                if player.duration > 0 {
-                    MiniPlayerProgressBar(
-                        duration: player.duration,
-                        currentTime: player.currentTime,
-                        isIOS26: false,
-                        cornerRadius: cardCornerRadius
-                    )
-                }
-            }
-            .frame(height: miniPlayerHeight)
-            .padding(.horizontal, cardHorizontalMargin)
-            .clipped()
+            classicMiniPlayerCard(current)
         }
+#else
+        classicMiniPlayerCard(current)
+#endif
+    }
+
+    private func classicMiniPlayerCard(_ current: AudioTrack) -> some View {
+        ZStack(alignment: .bottom) {
+            ClassicMiniPlayerBackground()
+
+            MiniAudioPlayerView(
+                track: current,
+                isIOS26: false,
+                height: miniPlayerHeight
+            )
+            .offset(x: horizontalDragOffset)
+
+            if player.duration > 0 {
+                MiniPlayerProgressBar(
+                    duration: player.duration,
+                    currentTime: player.currentTime,
+                    isIOS26: false,
+                    cornerRadius: cardCornerRadius
+                )
+            }
+        }
+        .frame(height: miniPlayerHeight)
+        .padding(.horizontal, cardHorizontalMargin)
+        .clipped()
     }
 
     var body: some View {

@@ -345,11 +345,12 @@ private struct NewPostTopBar: View {
     let onPublish: () -> Void
 
     private var isIOS26OrNewer: Bool {
+#if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             return true
-        } else {
-            return false
         }
+#endif
+        return false
     }
 
     var body: some View {
@@ -553,99 +554,6 @@ private struct CaretTrackingTextView: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
             placeholderLabel?.isHidden = !textView.text.isEmpty
-            scrollCaretIntoView(textView, animated: false)
-        }
-
-        func textViewDidChangeSelection(_ textView: UITextView) {
-            scrollCaretIntoView(textView, animated: false)
-        }
-
-        func scrollCaretIntoView(_ textView: UITextView, animated: Bool) {
-            DispatchQueue.main.async {
-                guard textView.isFirstResponder,
-                      let selectedRange = textView.selectedTextRange else {
-                    return
-                }
-
-                var caretRect = textView.caretRect(for: selectedRange.end)
-                caretRect = caretRect.insetBy(dx: 0, dy: -10)
-                textView.scrollRectToVisible(caretRect, animated: animated)
-            }
-        }
-    }
-}
-
-private struct CaretTrackingTextView: UIViewRepresentable {
-    @Binding var text: String
-    @Binding var isFocused: Bool
-
-    func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
-        textView.delegate = context.coordinator
-        textView.font = .systemFont(ofSize: 16)
-        textView.backgroundColor = .clear
-        textView.textColor = .label
-        textView.tintColor = UIColor(Color.appAccent)
-        textView.isScrollEnabled = true
-        textView.alwaysBounceVertical = true
-        textView.keyboardDismissMode = .interactive
-        textView.textContainerInset = .zero
-        textView.textContainer.lineFragmentPadding = 0
-        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return textView
-    }
-
-    func updateUIView(_ textView: UITextView, context: Context) {
-        if textView.text != text {
-            let selection = textView.selectedRange
-            textView.text = text
-            textView.selectedRange = NSRange(
-                location: min(selection.location, (text as NSString).length),
-                length: 0
-            )
-        }
-
-        if isFocused && !textView.isFirstResponder {
-            textView.becomeFirstResponder()
-        } else if !isFocused && textView.isFirstResponder {
-            textView.resignFirstResponder()
-        }
-
-        if textView.isFirstResponder {
-            context.coordinator.scrollCaretIntoView(textView, animated: false)
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
-    final class Coordinator: NSObject, UITextViewDelegate {
-        var parent: CaretTrackingTextView
-
-        init(parent: CaretTrackingTextView) {
-            self.parent = parent
-        }
-
-        func textViewDidBeginEditing(_ textView: UITextView) {
-            if !parent.isFocused {
-                DispatchQueue.main.async {
-                    self.parent.isFocused = true
-                }
-            }
-            scrollCaretIntoView(textView, animated: false)
-        }
-
-        func textViewDidEndEditing(_ textView: UITextView) {
-            if parent.isFocused {
-                DispatchQueue.main.async {
-                    self.parent.isFocused = false
-                }
-            }
-        }
-
-        func textViewDidChange(_ textView: UITextView) {
-            parent.text = textView.text
             scrollCaretIntoView(textView, animated: false)
         }
 
