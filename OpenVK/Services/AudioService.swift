@@ -808,6 +808,13 @@ final class AudioPlayerService: NSObject, ObservableObject {
     @Published var isOverlayHidden = false
     @Published var shuffleEnabled = false
     @Published var repeatMode: AudioRepeatMode = .off
+    @Published var crossfadeEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(crossfadeEnabled, forKey: "openvk.crossfade_enabled")
+        }
+    }
+    @Published var crossfadeDuration: TimeInterval = 3
+    @Published private(set) var isCrossfading = false
 
     var upcomingQueue: [AudioQueueEntry] {
         guard let index = currentIndex, queue.indices.contains(index), queue.count > 1 else { return [] }
@@ -821,7 +828,8 @@ final class AudioPlayerService: NSObject, ObservableObject {
         return slice.map { AudioQueueEntry(queueIndex: $0, track: queue[$0]) }
     }
 
-    private let player = AVPlayer()
+    private var player = AVPlayer()
+    private var crossfadePlayer = AVPlayer()
     private let cache = AudioCacheService.shared
     private var sourceQueue: [AudioTrack] = []
     private var timeObserver: Any?
@@ -829,6 +837,9 @@ final class AudioPlayerService: NSObject, ObservableObject {
     private var artworkTask: URLSessionDataTask?
     private var loadedArtworkKey: String?
     private var loadedArtwork: MPMediaItemArtwork?
+    private var failedTrackKeys: Set<String> = []
+    private var crossfadeTimer: DispatchWorkItem?
+    private var crossfadeTimeObserver: Any?
 
     private lazy var placeholderArtwork: MPMediaItemArtwork = {
         let size = CGSize(width: 512, height: 512)
@@ -854,12 +865,14 @@ final class AudioPlayerService: NSObject, ObservableObject {
     }()
 
     private override init() {
+        crossfadeEnabled = UserDefaults.standard.bool(forKey: "openvk.crossfade_enabled")
         super.init()
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
             guard let self = self else { return }
+            guard !self.isCrossfading else { return }
             let value = CMTimeGetSeconds(time)
             if value.isFinite { self.currentTime = max(0, value) }
             if let item = self.player.currentItem {
@@ -870,12 +883,25 @@ final class AudioPlayerService: NSObject, ObservableObject {
                     self.duration = Double(expected)
                 }
             }
+            self.checkCrossfadeTrigger()
         }
 
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(playerItemDidFinish(_:)),
             name: .AVPlayerItemDidPlayToEndTime,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(playerItemFailedToPlay(_:)),
+            name: .AVPlayerItemFailedToPlayToEndTime,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(playerItemNewErrorLogEntry(_:)),
+            name: .AVPlayerItemNewErrorLogEntry,
             object: nil
         )
         NotificationCenter.default.addObserver(
@@ -906,6 +932,9 @@ final class AudioPlayerService: NSObject, ObservableObject {
         if let timeObserver = timeObserver {
             player.removeTimeObserver(timeObserver)
         }
+        if let observer = crossfadeTimeObserver {
+            crossfadePlayer.removeTimeObserver(observer)
+        }
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -914,6 +943,8 @@ final class AudioPlayerService: NSObject, ObservableObject {
             togglePlayPause()
             return
         }
+
+        failedTrackKeys.removeAll()
 
         var resolvedQueue = newQueue.isEmpty ? [track] : newQueue
         var selectedIndex = resolvedQueue.firstIndex(where: { isSameTrack($0, track) })
@@ -944,6 +975,7 @@ final class AudioPlayerService: NSObject, ObservableObject {
 
     func playQueueItem(at index: Int) {
         guard queue.indices.contains(index) else { return }
+        failedTrackKeys.removeAll()
         prepareAndPlay(index: index)
     }
 
@@ -983,11 +1015,16 @@ final class AudioPlayerService: NSObject, ObservableObject {
             return
         }
 
+        if isCrossfading {
+            finalizeCrossfade()
+            return
+        }
+
         let nextIndex = index + 1
         if nextIndex < queue.count {
-            prepareAndPlay(index: nextIndex)
+            prepareAndPlay(index: nextIndex, skipFailed: !userInitiated)
         } else if repeatMode == .all || loopAtEnd {
-            prepareAndPlay(index: 0)
+            prepareAndPlay(index: 0, skipFailed: !userInitiated)
         } else {
             finishQueue()
         }
@@ -1000,6 +1037,8 @@ final class AudioPlayerService: NSObject, ObservableObject {
             resume()
             return
         }
+
+        completeCrossfade()
 
         let previousIndex = index - 1
         if previousIndex >= 0 {
@@ -1014,7 +1053,7 @@ final class AudioPlayerService: NSObject, ObservableObject {
 
     func seek(to seconds: Double) {
         let upper = duration > 0 ? duration : seconds
-        let clamped = min(max(0, seconds), upper)
+        let clamped = min(max(0, seconds), max(0, upper - 0.1))
         player.seek(
             to: CMTime(seconds: clamped, preferredTimescale: 600),
             toleranceBefore: .zero,
@@ -1083,8 +1122,17 @@ final class AudioPlayerService: NSObject, ObservableObject {
         artworkTask = nil
         loadedArtwork = nil
         loadedArtworkKey = nil
+        crossfadeTimer?.cancel()
+        crossfadeTimer = nil
+        if let observer = crossfadeTimeObserver {
+            crossfadePlayer.removeTimeObserver(observer)
+            crossfadeTimeObserver = nil
+        }
+        crossfadePlayer.pause()
+        crossfadePlayer.replaceCurrentItem(with: nil)
         player.pause()
         player.replaceCurrentItem(with: nil)
+        player.volume = Float(1.0)
         sourceQueue = []
         queue = []
         currentTrack = nil
@@ -1094,15 +1142,31 @@ final class AudioPlayerService: NSObject, ObservableObject {
         isPlaying = false
         isPreparing = false
         isExpanded = false
+        isCrossfading = false
         errorMessage = nil
+        failedTrackKeys.removeAll()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         syncRemoteCommandState()
         deactivateAudioSession()
     }
 
-    private func prepareAndPlay(index: Int) {
+    private func prepareAndPlay(index: Int, skipFailed: Bool = false) {
         guard queue.indices.contains(index) else { return }
         let track = queue[index]
+        let key = trackKey(track)
+
+        if skipFailed && failedTrackKeys.contains(key) {
+            let nextIndex = index + 1
+            if nextIndex < queue.count {
+                prepareAndPlay(index: nextIndex, skipFailed: true)
+            } else if repeatMode == .all {
+                prepareAndPlay(index: 0, skipFailed: true)
+            } else {
+                finishQueue()
+            }
+            return
+        }
+
         currentIndex = index
         currentTrack = track
         currentTime = 0
@@ -1123,30 +1187,29 @@ final class AudioPlayerService: NSObject, ObservableObject {
             return
         }
 
-        cache.cache(track) { [weak self] result in
-            guard let self = self, self.playbackToken == token else { return }
-            switch result {
-            case .success(let localURL):
-                self.beginPlayback(track: track, url: localURL, token: token)
-            case .failure(let error):
-                if let remoteURL = self.cache.usableRemoteURL(for: track) {
-                    self.beginPlayback(track: track, url: remoteURL, token: token)
-                } else {
-                    self.isPreparing = false
-                    self.errorMessage = error.localizedDescription
-                    self.updateNowPlayingInfo()
-                    self.syncRemoteCommandState()
-                    self.deactivateAudioSession()
-                }
+        if let remoteURL = cache.usableRemoteURL(for: track) {
+            beginPlayback(track: track, url: remoteURL, token: token)
+            cache.cache(track, completion: nil)
+        } else {
+            isPreparing = false
+            errorMessage = AudioPlaybackError.unavailableURL.localizedDescription
+            updateNowPlayingInfo()
+            syncRemoteCommandState()
+            deactivateAudioSession()
+            failedTrackKeys.insert(key)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.next(loopAtEnd: true)
             }
         }
     }
 
     private func beginPlayback(track: AudioTrack, url: URL, token: UUID) {
         guard playbackToken == token, isSameTrack(track, currentTrack) else { return }
+        completeCrossfade()
         activateAudioSession()
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
+        player.volume = Float(1.0)
         player.play()
         isPreparing = false
         isPlaying = true
@@ -1187,7 +1250,200 @@ final class AudioPlayerService: NSObject, ObservableObject {
         do {
             try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         } catch {
-            // An already inactive session is harmless here.
+        }
+    }
+
+    private func checkCrossfadeTrigger() {
+        guard crossfadeEnabled,
+              !isCrossfading,
+              isPlaying,
+              let nextIndex = nextTrackIndex(),
+              duration > 0,
+              duration - currentTime <= crossfadeDuration else { return }
+        beginCrossfade(to: nextIndex)
+    }
+
+    private func nextTrackIndex() -> Int? {
+        guard let index = currentIndex, !queue.isEmpty else { return nil }
+        let nextIndex = index + 1
+        if nextIndex < queue.count {
+            return nextIndex
+        } else if repeatMode == .all {
+            return 0
+        }
+        return nil
+    }
+
+    private func beginCrossfade(to nextIndex: Int) {
+        guard queue.indices.contains(nextIndex) else { return }
+        let nextTrack = queue[nextIndex]
+        guard let remoteURL = cache.usableRemoteURL(for: nextTrack) else { return }
+
+        let nextItem = AVPlayerItem(url: cache.cachedURL(for: nextTrack) ?? remoteURL)
+        crossfadePlayer.replaceCurrentItem(with: nextItem)
+        crossfadePlayer.volume = Float(0)
+        crossfadePlayer.play()
+        isCrossfading = true
+
+        if let existing = crossfadeTimeObserver {
+            crossfadePlayer.removeTimeObserver(existing)
+        }
+        crossfadeTimeObserver = crossfadePlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            guard let self = self, self.isCrossfading else { return }
+            let value = CMTimeGetSeconds(time)
+            if value.isFinite { self.currentTime = max(0, value) }
+            if let item = self.crossfadePlayer.currentItem {
+                let itemDuration = CMTimeGetSeconds(item.duration)
+                if itemDuration.isFinite && itemDuration > 0 {
+                    self.duration = itemDuration
+                } else if let expected = self.currentTrack?.durationSeconds {
+                    self.duration = Double(expected)
+                }
+            }
+        }
+
+        currentIndex = nextIndex
+        currentTrack = nextTrack
+        currentTime = 0
+        duration = Double(nextTrack.durationSeconds ?? 0)
+        updateNowPlayingInfo(loadArtwork: true)
+        syncRemoteCommandState()
+
+        let fadeDuration = min(crossfadeDuration, duration - currentTime)
+        let fadeSteps = 10
+        let stepInterval = fadeDuration / Double(fadeSteps)
+
+        var currentStep = 0
+        let timer = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            currentStep += 1
+            let progress = Double(currentStep) / Double(fadeSteps)
+            self.player.volume = Float(max(0, 1.0 - progress))
+            self.crossfadePlayer.volume = Float(min(1.0, progress))
+            if currentStep < fadeSteps {
+                DispatchQueue.main.asyncAfter(deadline: .now() + stepInterval) { [weak self] in
+                    guard let self = self, let timer = self.crossfadeTimer else { return }
+                    timer.perform()
+                }
+            }
+        }
+        crossfadeTimer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + stepInterval) { [weak self] in
+            guard let self = self, let timer = self.crossfadeTimer else { return }
+            timer.perform()
+        }
+    }
+
+    private func finalizeCrossfade() {
+        guard isCrossfading else {
+            completeCrossfade()
+            return
+        }
+
+        crossfadeTimer?.cancel()
+        crossfadeTimer = nil
+
+        if let observer = timeObserver {
+            player.removeTimeObserver(observer)
+            timeObserver = nil
+        }
+        if let observer = crossfadeTimeObserver {
+            crossfadePlayer.removeTimeObserver(observer)
+            crossfadeTimeObserver = nil
+        }
+
+        crossfadePlayer.volume = Float(1.0)
+        swap(&player, &crossfadePlayer)
+
+        crossfadePlayer.pause()
+        crossfadePlayer.replaceCurrentItem(with: nil)
+
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            guard let self = self else { return }
+            guard !self.isCrossfading else { return }
+            let value = CMTimeGetSeconds(time)
+            if value.isFinite { self.currentTime = max(0, value) }
+            if let item = self.player.currentItem {
+                let itemDuration = CMTimeGetSeconds(item.duration)
+                if itemDuration.isFinite && itemDuration > 0 {
+                    self.duration = itemDuration
+                } else if let expected = self.currentTrack?.durationSeconds {
+                    self.duration = Double(expected)
+                }
+            }
+            self.checkCrossfadeTrigger()
+        }
+
+        currentTime = CMTimeGetSeconds(player.currentTime())
+        if let item = player.currentItem {
+            let itemDuration = CMTimeGetSeconds(item.duration)
+            duration = itemDuration.isFinite && itemDuration > 0 ? itemDuration : Double(currentTrack?.durationSeconds ?? 0)
+        } else {
+            duration = Double(currentTrack?.durationSeconds ?? 0)
+        }
+        isPreparing = false
+        isPlaying = true
+        isCrossfading = false
+        errorMessage = nil
+        updateNowPlayingInfo()
+        syncRemoteCommandState()
+        prefetchNeighbors()
+    }
+
+    private func completeCrossfade() {
+        crossfadeTimer?.cancel()
+        crossfadeTimer = nil
+        if let observer = crossfadeTimeObserver {
+            crossfadePlayer.removeTimeObserver(observer)
+            crossfadeTimeObserver = nil
+        }
+        crossfadePlayer.pause()
+        crossfadePlayer.replaceCurrentItem(with: nil)
+        player.volume = Float(1.0)
+        crossfadePlayer.volume = Float(1.0)
+        isCrossfading = false
+    }
+
+    @objc private func playerItemFailedToPlay(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let item = notification.object as? AVPlayerItem,
+                  item === self.player.currentItem,
+                  let track = self.currentTrack else { return }
+            self.handlePlaybackError(for: track)
+        }
+    }
+
+    @objc private func playerItemNewErrorLogEntry(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let item = notification.object as? AVPlayerItem,
+                  item === self.player.currentItem,
+                  let errorLog = item.errorLog(),
+                  let lastEvent = errorLog.events.last,
+                  lastEvent.errorStatusCode != 0,
+                  let track = self.currentTrack else { return }
+            self.handlePlaybackError(for: track)
+        }
+    }
+
+    private func handlePlaybackError(for track: AudioTrack) {
+        let key = trackKey(track)
+        failedTrackKeys.insert(key)
+        errorMessage = "Ошибка воспроизведения"
+        isPreparing = false
+        isPlaying = false
+        player.pause()
+        updateNowPlayingInfo()
+        syncRemoteCommandState()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.next(loopAtEnd: true)
         }
     }
 
@@ -1404,24 +1660,27 @@ final class AudioPlayerService: NSObject, ObservableObject {
     }
 
     @objc private func audioSessionInterrupted(_ notification: Notification) {
-        guard let info = notification.userInfo,
-              let rawType = info[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let info = notification.userInfo,
+                  let rawType = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
 
-        switch type {
-        case .began:
-            player.pause()
-            isPlaying = false
-            updateNowPlayingInfo()
-            syncRemoteCommandState()
-        case .ended:
-            let rawOptions = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
-            let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
-            if options.contains(.shouldResume), currentTrack != nil {
-                resume()
+            switch type {
+            case .began:
+                self.player.pause()
+                self.isPlaying = false
+                self.updateNowPlayingInfo()
+                self.syncRemoteCommandState()
+            case .ended:
+                let rawOptions = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
+                if options.contains(.shouldResume), self.currentTrack != nil {
+                    self.resume()
+                }
+            @unknown default:
+                break
             }
-        @unknown default:
-            break
         }
     }
 
@@ -1440,6 +1699,14 @@ final class AudioPlayerService: NSObject, ObservableObject {
     @objc private func playerItemDidFinish(_ notification: Notification) {
         guard let item = notification.object as? AVPlayerItem,
               item === player.currentItem else { return }
-        next(userInitiated: false)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if self.isCrossfading {
+                self.finalizeCrossfade()
+            } else {
+                self.next(userInitiated: false)
+            }
+        }
     }
 }

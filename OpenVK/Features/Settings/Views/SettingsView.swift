@@ -671,6 +671,7 @@ struct DataAndMemorySettingsView: View {
     @State private var showClearAudioCacheDialog = false
     @State private var audioCacheCleared = false
     @State private var audioCacheLimit = AudioCacheService.shared.cacheLimit
+    @State private var crossfadeEnabled = AudioPlayerService.shared.crossfadeEnabled
 
     var body: some View {
         List {
@@ -747,6 +748,23 @@ struct DataAndMemorySettingsView: View {
                     refreshAudioCacheSize()
                 }
 
+                Toggle(isOn: $crossfadeEnabled) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.appAccent)
+                                .frame(width: 28, height: 28)
+                            Image(systemName: "waveform")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.white)
+                        }
+                        Text("Плавный переход")
+                    }
+                }
+                .onChange(of: crossfadeEnabled) { newValue in
+                    AudioPlayerService.shared.crossfadeEnabled = newValue
+                }
+
                 Button(role: .destructive) {
                     showClearAudioCacheDialog = true
                 } label: {
@@ -772,6 +790,7 @@ struct DataAndMemorySettingsView: View {
         .onAppear {
             refreshCacheSize()
             audioCacheLimit = AudioCacheService.shared.cacheLimit
+            crossfadeEnabled = AudioPlayerService.shared.crossfadeEnabled
             refreshAudioCacheSize()
         }
         .alert(isPresented: $showClearCacheAlert) {

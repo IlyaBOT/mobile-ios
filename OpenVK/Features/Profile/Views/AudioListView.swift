@@ -94,7 +94,6 @@ struct AudioListView: View {
         .background(Color(.systemBackground))
         .navigationTitle("Музыка")
         .navigationBarTitleDisplayMode(.inline)
-        .customBackButton(title: "Назад")
         .refreshable {
             await refresh()
         }
@@ -506,7 +505,6 @@ private struct AudioPlaylistDetailView: View {
         }
         .navigationTitle(playlist.title)
         .navigationBarTitleDisplayMode(.inline)
-        .customBackButton(title: "Моя музыка")
         .onAppear(perform: load)
     }
 
