@@ -57,43 +57,42 @@ struct AudioListView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            AudioLibraryTabs(selectedTab: $selectedTab)
-                .padding(.top, 4)
-
-            AudioGlobalSearchField(text: $searchQuery)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 10)
-
-            Divider()
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    if isCurrentSectionLoading {
-                        AudioLibraryLoadingView()
-                            .padding(.top, 12)
-                    } else {
-                        if selectedTab == .mine && !isSearching {
-                            playlistsSection
-                        }
-                        tracksSection
-                    }
-
-                    if let message = viewModel.errorMessage, !message.isEmpty {
-                        Text(message)
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 16)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 18) {
+                Picker("Раздел", selection: $selectedTab) {
+                    ForEach(AudioLibraryTab.allCases, id: \.self) { tab in
+                        Text(tab.title).tag(tab)
                     }
                 }
-                .padding(.top, 12)
-                .padding(.bottom, player.currentTrack == nil ? 24 : 92)
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+
+                if isCurrentSectionLoading {
+                    AudioLibraryLoadingView()
+                        .padding(.top, 12)
+                } else {
+                    if selectedTab == .mine && !isSearching {
+                        playlistsSection
+                    }
+                    tracksSection
+                }
+
+                if let message = viewModel.errorMessage, !message.isEmpty {
+                    Text(message)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 16)
+                }
             }
+            .padding(.top, 4)
+            .padding(.bottom, player.currentTrack == nil ? 24 : 92)
         }
         .background(Color(.systemBackground))
         .navigationTitle("Музыка")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchQuery, prompt: "Поиск по всей музыке")
+        .customBackButton(title: "Назад")
         .refreshable {
             await refresh()
         }
@@ -221,67 +220,6 @@ struct AudioListView: View {
                 }
             }
         }
-    }
-}
-
-private struct AudioLibraryTabs: View {
-    @Binding var selectedTab: AudioLibraryTab
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(AudioLibraryTab.allCases, id: \.rawValue) { tab in
-                Button(action: {
-                    HapticManager.impact(.light)
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        selectedTab = tab
-                    }
-                }) {
-                    VStack(spacing: 7) {
-                        Text(tab.title)
-                            .font(.system(size: 15, weight: selectedTab == tab ? .semibold : .medium))
-                            .foregroundColor(selectedTab == tab ? .appAccent : .secondary)
-
-                        Rectangle()
-                            .fill(selectedTab == tab ? Color.appAccent : Color.clear)
-                            .frame(height: 2)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-        }
-        .padding(.horizontal, 16)
-    }
-}
-
-private struct AudioGlobalSearchField: View {
-    @Binding var text: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(Color(.secondaryLabel))
-
-            TextField("Поиск по всей музыке", text: $text)
-                .font(.system(size: 16))
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-
-            if !text.isEmpty {
-                Button(action: { text = "" }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(Color(.tertiaryLabel))
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 38)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
