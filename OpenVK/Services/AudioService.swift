@@ -1253,9 +1253,10 @@ final class AudioPlayerService: NSObject, ObservableObject {
             return .success
         }
 
-        commands.bookmarkCommand.localizedTitle = "Добавить в мою музыку"
-        commands.bookmarkCommand.localizedShortTitle = "В музыку"
-        commands.bookmarkCommand.addTarget { [weak self] event in
+        commands.likeCommand.isEnabled = true
+        commands.likeCommand.localizedTitle = "Добавить музыку"
+        commands.likeCommand.localizedShortTitle = "В музыку"
+        commands.likeCommand.addTarget { [weak self] event in
             guard let self = self,
                   let track = self.currentTrack,
                   let feedback = event as? MPFeedbackCommandEvent,
@@ -1286,11 +1287,11 @@ final class AudioPlayerService: NSObject, ObservableObject {
         commands.changeShuffleModeCommand.currentShuffleType = shuffleEnabled ? .items : .off
 
         if let track = currentTrack {
-            commands.bookmarkCommand.isEnabled = AudioLibraryMembership.shared.canMutate(track)
-            commands.bookmarkCommand.isActive = AudioLibraryMembership.shared.isAdded(track)
+            commands.likeCommand.isEnabled = AudioLibraryMembership.shared.canMutate(track)
+            commands.likeCommand.isActive = AudioLibraryMembership.shared.isAdded(track)
         } else {
-            commands.bookmarkCommand.isEnabled = false
-            commands.bookmarkCommand.isActive = false
+            commands.likeCommand.isEnabled = false
+            commands.likeCommand.isActive = false
         }
 
         switch repeatMode {
