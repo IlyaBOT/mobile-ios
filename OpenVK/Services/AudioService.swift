@@ -1334,11 +1334,42 @@ final class AudioPlayerService: NSObject, ObservableObject {
         artworkTask?.cancel()
         artworkTask = nil
 
-        guard let artworkURL = track.artworkURL,
-              let sanitized = AudioService.sanitizeArtworkURL(artworkURL),
-              let url = URL(string: sanitized) else { return }
-
         let key = trackKey(track)
+
+        if let artworkURL = track.artworkURL,
+           let sanitized = AudioService.sanitizeArtworkURL(artworkURL),
+           let url = URL(string: sanitized) {
+            downloadArtworkImage(from: url, for: key)
+            return
+        }
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            let itunesURLString = await ITunesArtworkService.shared.fetchTrackArtworkURL(
+                artist: track.artist,
+                title: track.title
+            )
+            guard let itunesURLString = itunesURLString,
+                  let sanitized = AudioService.sanitizeArtworkURL(itunesURLString),
+                  let url = URL(string: sanitized) else {
+                await MainActor.run {
+                    guard let current = self.currentTrack, self.trackKey(current) == key else { return }
+                    self.loadedArtworkKey = nil
+                    self.loadedArtwork = nil
+                    self.updateNowPlayingInfo()
+                }
+                return
+            }
+
+            await MainActor.run {
+                guard let current = self.currentTrack, self.trackKey(current) == key else { return }
+                self.downloadArtworkImage(from: url, for: key)
+            }
+        }
+    }
+
+    private func downloadArtworkImage(from url: URL, for key: String) {
+        artworkTask?.cancel()
         artworkTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let self = self,
                   let data = data,

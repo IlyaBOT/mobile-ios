@@ -726,21 +726,20 @@ struct SearchView: View {
         }) {
             HStack(spacing: 12) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(track.color)
+                    AudioArtworkView(track: track, cornerRadius: 8)
 
                     if isCurrent && audioPlayer.isPreparing {
-                        RoundedRectangle(cornerRadius: 8)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(Color.black.opacity(0.15))
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     } else if isPlaying {
-                        RoundedRectangle(cornerRadius: 8)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(Color.black.opacity(0.15))
                         AudioPauseBadge()
                     }
                 }
-                .frame(width: 44, height: 44)
+                .frame(width: 46, height: 46)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.title)

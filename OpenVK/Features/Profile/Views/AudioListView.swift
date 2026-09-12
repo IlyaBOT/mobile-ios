@@ -426,7 +426,7 @@ private struct AudioPlaylistCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            AudioArtworkView(urlString: playlist.coverURL, cornerRadius: 12)
+            AudioArtworkView(playlist: playlist, cornerRadius: 12)
                 .frame(width: 132, height: 132)
 
             Text(playlist.title)
@@ -464,7 +464,7 @@ private struct AudioPlaylistDetailView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 VStack(spacing: 10) {
-                    AudioArtworkView(urlString: playlist.coverURL, cornerRadius: 16)
+                    AudioArtworkView(playlist: playlist, cornerRadius: 16)
                         .frame(width: 190, height: 190)
                         .shadow(color: Color.black.opacity(0.12), radius: 10, y: 5)
 
@@ -548,7 +548,7 @@ struct AudioTrackRow: View {
         Button(action: toggleTrack) {
             HStack(spacing: 12) {
                 ZStack {
-                    AudioArtworkView(urlString: track.artworkURL, cornerRadius: 8)
+                    AudioArtworkView(track: track, cornerRadius: 8)
 
                     if isCurrent && player.isPreparing {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -650,13 +650,86 @@ private struct AudioLibraryLoadingView: View {
 
 struct AudioArtworkView: View {
     let urlString: String?
+    let searchTitle: String?
+    let searchArtist: String?
+    let isPlaylist: Bool
     var cornerRadius: CGFloat = 10
 
-    private var validURL: URL? {
+    @State private var asyncResolvedURL: String? = nil
+    @State private var resolvedKey: String? = nil
+
+    init(urlString: String?, cornerRadius: CGFloat = 10) {
+        self.urlString = urlString
+        self.searchTitle = nil
+        self.searchArtist = nil
+        self.isPlaylist = false
+        self.cornerRadius = cornerRadius
+    }
+
+    init(track: AudioTrack, cornerRadius: CGFloat = 10) {
+        self.urlString = track.artworkURL
+        self.searchTitle = track.title
+        self.searchArtist = track.artist
+        self.isPlaylist = false
+        self.cornerRadius = cornerRadius
+    }
+
+    init(playlist: AudioPlaylist, cornerRadius: CGFloat = 10) {
+        self.urlString = playlist.coverURL
+        self.searchTitle = playlist.title
+        self.searchArtist = nil
+        self.isPlaylist = true
+        self.cornerRadius = cornerRadius
+    }
+
+    init(urlString: String?, searchTitle: String?, searchArtist: String? = nil, isPlaylist: Bool = false, cornerRadius: CGFloat = 10) {
+        self.urlString = urlString
+        self.searchTitle = searchTitle
+        self.searchArtist = searchArtist
+        self.isPlaylist = isPlaylist
+        self.cornerRadius = cornerRadius
+    }
+
+    private var queryKey: String {
+        "\(isPlaylist ? "p" : "t")_\(searchArtist ?? "")_\(searchTitle ?? "")_\(urlString ?? "")"
+    }
+
+    private var openVKURL: URL? {
         guard let sanitized = AudioService.sanitizeArtworkURL(urlString) else {
             return nil
         }
         return URL(string: sanitized)
+    }
+
+    private var iTunesURL: URL? {
+        if let syncURL = synchronousCachedITunesURL,
+           let sanitized = AudioService.sanitizeArtworkURL(syncURL) {
+            return URL(string: sanitized)
+        }
+
+        if resolvedKey == queryKey,
+           let asyncURL = asyncResolvedURL,
+           let sanitized = AudioService.sanitizeArtworkURL(asyncURL) {
+            return URL(string: sanitized)
+        }
+
+        return nil
+    }
+
+    private var synchronousCachedITunesURL: String? {
+        guard openVKURL == nil else { return nil }
+        if isPlaylist {
+            guard let title = searchTitle, !title.isEmpty else { return nil }
+            return ITunesArtworkService.shared.cachedPlaylistArtworkURL(title: title)
+        } else {
+            guard let title = searchTitle, let artist = searchArtist,
+                  !title.isEmpty || !artist.isEmpty else { return nil }
+            return ITunesArtworkService.shared.cachedTrackArtworkURL(artist: artist, title: title)
+        }
+    }
+
+    private var activeURL: URL? {
+        openVKURL ?? iTunesURL
     }
 
     var body: some View {
@@ -664,7 +737,7 @@ struct AudioArtworkView: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
 
-            if let url = validURL {
+            if let url = activeURL {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
@@ -674,7 +747,7 @@ struct AudioArtworkView: View {
                     case .failure:
                         placeholder
                     case .empty:
-                        ProgressView()
+                        Color.clear
                     @unknown default:
                         placeholder
                     }
@@ -684,6 +757,44 @@ struct AudioArtworkView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .task(id: queryKey) {
+            await loadITunesArtworkIfNeeded()
+        }
+    }
+
+    private func loadITunesArtworkIfNeeded() async {
+        guard openVKURL == nil else {
+            await MainActor.run {
+                self.resolvedKey = queryKey
+                self.asyncResolvedURL = nil
+            }
+            return
+        }
+
+        if synchronousCachedITunesURL != nil {
+            return
+        }
+
+        let targetKey = queryKey
+
+        if isPlaylist {
+            guard let title = searchTitle, !title.isEmpty else { return }
+            let found = await ITunesArtworkService.shared.fetchPlaylistArtworkURL(title: title)
+            await MainActor.run {
+                guard self.queryKey == targetKey else { return }
+                self.resolvedKey = targetKey
+                self.asyncResolvedURL = found
+            }
+        } else {
+            guard let title = searchTitle, let artist = searchArtist,
+                  !title.isEmpty || !artist.isEmpty else { return }
+            let found = await ITunesArtworkService.shared.fetchTrackArtworkURL(artist: artist, title: title)
+            await MainActor.run {
+                guard self.queryKey == targetKey else { return }
+                self.resolvedKey = targetKey
+                self.asyncResolvedURL = found
+            }
+        }
     }
 
     private var placeholder: some View {
@@ -737,11 +848,97 @@ private final class AudioKeyboardObserver: ObservableObject {
     }
 }
 
+private struct TabBarAccessor: UIViewRepresentable {
+    @Binding var tabBarTopInset: CGFloat
+
+    func makeUIView(context: Context) -> TabBarTrackerView {
+        let view = TabBarTrackerView()
+        view.isUserInteractionEnabled = false
+        view.onUpdate = { topInset in
+            if abs(tabBarTopInset - topInset) > 0.5 {
+                DispatchQueue.main.async {
+                    tabBarTopInset = topInset
+                }
+            }
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: TabBarTrackerView, context: Context) {
+        uiView.isUserInteractionEnabled = false
+        uiView.onUpdate = { topInset in
+            if abs(tabBarTopInset - topInset) > 0.5 {
+                DispatchQueue.main.async {
+                    tabBarTopInset = topInset
+                }
+            }
+        }
+    }
+}
+
+private final class TabBarTrackerView: UIView {
+    var onUpdate: ((CGFloat) -> Void)?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        return nil
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        return false
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        checkTabBar()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        checkTabBar()
+    }
+
+    private func checkTabBar() {
+        guard let window = self.window else { return }
+        if let bar = findTabBar(in: window), !bar.isHidden {
+            let rect = bar.convert(bar.bounds, to: window)
+            if rect.height > 0 && rect.minY > 0 {
+                let inset = max(0, window.bounds.height - rect.minY)
+                onUpdate?(inset)
+            }
+        }
+    }
+
+    private func findTabBar(in view: UIView) -> UITabBar? {
+        if let bar = view as? UITabBar {
+            return bar
+        }
+        for sub in view.subviews {
+            if let found = findTabBar(in: sub) {
+                return found
+            }
+        }
+        return nil
+    }
+}
+
 struct GlobalAudioPlayerOverlay: View {
     let bottomInset: CGFloat
     @ObservedObject private var player = AudioPlayerService.shared
     @StateObject private var keyboard = AudioKeyboardObserver()
     @State private var dragOffset: CGFloat = 0
+    @State private var measuredTabBarInset: CGFloat = 0
 
     private let miniPlayerHeight: CGFloat = 52
     private let tabBarBaseHeight: CGFloat = 49
@@ -762,9 +959,16 @@ struct GlobalAudioPlayerOverlay: View {
                 let keyboardOverlap = keyboard.endFrame.isNull
                     ? CGFloat(0)
                     : max(0, globalFrame.maxY - keyboard.endFrame.minY)
+                let effectiveTabBarInset: CGFloat = {
+                    if measuredTabBarInset > 0 {
+                        return measuredTabBarInset
+                    }
+                    let baseBarHeight: CGFloat = isIOS26OrNewer ? 128 : tabBarBaseHeight
+                    return baseBarHeight + bottomInset
+                }()
                 let dockInset = keyboardOverlap > 0
                     ? keyboardOverlap
-                    : tabBarBaseHeight + bottomInset
+                    : effectiveTabBarInset
                 let floatGap: CGFloat = keyboardOverlap > 0 ? 0 : (isIOS26OrNewer ? 8 : 0)
                 let collapsedOffset = max(
                     0,
@@ -792,6 +996,12 @@ struct GlobalAudioPlayerOverlay: View {
                 .offset(y: sheetOffset)
             }
         }
+        .overlay(
+            TabBarAccessor(tabBarTopInset: $measuredTabBarInset)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false),
+            alignment: .bottomLeading
+        )
         .ignoresSafeArea()
         .allowsHitTesting(player.currentTrack != nil)
     }
@@ -1002,6 +1212,7 @@ private struct AudioPlayerSheet: View {
         .background(
             Color(.systemBackground)
                 .opacity(expandedOpacity)
+                .allowsHitTesting(player.isExpanded)
         )
     }
 
@@ -1062,7 +1273,7 @@ private struct AudioPlayerSheet: View {
                 horizontalDragOffset = enterOffset
             }
 
-            DispatchQueue.main.async {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
                 withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
                     horizontalDragOffset = 0
                 }
@@ -1145,7 +1356,7 @@ private struct MiniAudioPlayerView: View {
                 let artworkSize: CGFloat = height - 16 // 36 pt when height is 52
                 let artworkRadius: CGFloat = isIOS26 ? 7 : 6
 
-                AudioArtworkView(urlString: track.artworkURL, cornerRadius: artworkRadius)
+                AudioArtworkView(track: track, cornerRadius: artworkRadius)
                     .frame(width: artworkSize, height: artworkSize)
                     .overlay(
                         RoundedRectangle(cornerRadius: artworkRadius, style: .continuous)
@@ -1370,7 +1581,7 @@ private struct ExpandedAudioPlayerControlsView: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 8)
 
-                AudioArtworkView(urlString: currentTrack.artworkURL, cornerRadius: 16)
+                AudioArtworkView(track: currentTrack, cornerRadius: 16)
                     .frame(width: artworkSize, height: artworkSize)
                     .shadow(color: Color.black.opacity(0.14), radius: 14, y: 7)
 
@@ -1530,7 +1741,7 @@ private struct AudioPlaybackQueueView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(player.upcomingQueue.prefix(150)) { entry in
                             HStack(spacing: 12) {
-                                AudioArtworkView(urlString: entry.track.artworkURL, cornerRadius: 8)
+                                AudioArtworkView(track: entry.track, cornerRadius: 8)
                                     .frame(width: 48, height: 48)
 
                                 VStack(alignment: .leading, spacing: 2) {
