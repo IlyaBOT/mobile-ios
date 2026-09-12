@@ -1349,6 +1349,7 @@ private struct MiniAudioPlayerView: View {
     let isIOS26: Bool
     let height: CGFloat
     @ObservedObject private var player = AudioPlayerService.shared
+    @ObservedObject private var membership = AudioLibraryMembership.shared
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1389,6 +1390,26 @@ private struct MiniAudioPlayerView: View {
 
             Spacer(minLength: 6)
 
+            Button(action: {
+                HapticManager.impact(.light)
+                membership.toggle(track)
+            }) {
+                Group {
+                    if membership.isPending(track) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    } else {
+                        Image(systemName: membership.isAdded(track) ? "checkmark" : "plus")
+                            .font(.system(size: isIOS26 ? 16 : 15, weight: .semibold))
+                    }
+                }
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(MiniPlayerButtonStyle())
+            .disabled(!membership.canMutate(track) || membership.isPending(track))
+            .foregroundColor(membership.canMutate(track) ? .appAccent : .secondary)
+
             if player.isPreparing {
                 ProgressView()
                     .frame(width: 32, height: 32)
@@ -1404,17 +1425,6 @@ private struct MiniAudioPlayerView: View {
                 }
                 .buttonStyle(MiniPlayerButtonStyle())
             }
-
-            Button(action: {
-                HapticManager.impact(.light)
-                player.next(loopAtEnd: true)
-            }) {
-                Image(systemName: "forward.fill")
-                    .font(.system(size: isIOS26 ? 14 : 13, weight: .semibold))
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(MiniPlayerButtonStyle())
         }
         .padding(.horizontal, isIOS26 ? 12 : 16)
         .frame(height: height)
