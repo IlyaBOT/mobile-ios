@@ -276,6 +276,37 @@ final class AudioService {
         }
     }
 
+    func searchPlaylists(
+        query: String,
+        offset: Int = 0,
+        count: Int = 25,
+        completion: @escaping (Result<[AudioPlaylist], APIError>) -> Void
+    ) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion(.success([]))
+            return
+        }
+
+        APIClient.shared.call(
+            method: "audio.searchAlbums",
+            parameters: [
+                "q": trimmed,
+                "offset": "\(offset)",
+                "limit": "\(count)"
+            ],
+            httpMethod: "GET",
+            as: AudioPlaylistsResponse.self
+        ) { result in
+            switch result {
+            case .success(let response):
+                completion(.success((response.items ?? []).compactMap(Self.mapPlaylist)))
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
     private static func isValidCatalogItem(_ item: AudioItemDTO) -> Bool {
         if item.ready == false || item.withdrawn == true {
             return false

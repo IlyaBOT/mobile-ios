@@ -59,18 +59,22 @@ struct AudioListView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
-                Picker("Раздел", selection: $selectedTab) {
-                    ForEach(AudioLibraryTab.allCases, id: \.self) { tab in
-                        Text(tab.title).tag(tab)
+                if !isSearching {
+                    Picker("Раздел", selection: $selectedTab) {
+                        ForEach(AudioLibraryTab.allCases, id: \.self) { tab in
+                            Text(tab.title).tag(tab)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
 
                 if isCurrentSectionLoading {
                     AudioLibraryLoadingView()
                         .padding(.top, 12)
+                } else if isSearching {
+                    searchResultsSection
                 } else {
                     if selectedTab == .mine && !isSearching {
                         playlistsSection
@@ -177,7 +181,93 @@ struct AudioListView: View {
                 ForEach(displayedTracks) { track in
                     AudioTrackRow(track: track, queue: displayedTracks)
                         .padding(.horizontal, 16)
+                        .onAppear {
+                            if track.id == displayedTracks.last?.id,
+                               selectedTab == .popular,
+                               viewModel.hasMorePopular {
+                                viewModel.loadMorePopular()
+                            }
+                        }
                     SectionSeparator()
+                }
+
+                if viewModel.isLoadingMorePopular {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .padding(.vertical, 12)
+                        Spacer()
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var searchResultsSection: some View {
+        if !viewModel.searchPlaylists.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("ПЛЕЙЛИСТЫ")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 12) {
+                        ForEach(viewModel.searchPlaylists) { playlist in
+                            NavigationLink(destination: AudioPlaylistDetailView(playlist: playlist)) {
+                                AudioPlaylistCard(playlist: playlist)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 0) {
+            Text("ТРЕКИ")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 6)
+
+            if viewModel.searchResults.isEmpty && !viewModel.isSearching {
+                VStack(spacing: 8) {
+                    Image(systemName: "music.note.list")
+                        .font(.system(size: 34))
+                        .foregroundColor(Color(.tertiaryLabel))
+                    Text("Ничего не найдено")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 36)
+            } else {
+                ForEach(viewModel.searchResults) { track in
+                    AudioTrackRow(track: track, queue: viewModel.searchResults)
+                        .padding(.horizontal, 16)
+                        .onAppear {
+                            if track.id == viewModel.searchResults.last?.id,
+                               viewModel.hasMoreSearchResults {
+                                viewModel.loadMoreSearchResults()
+                            }
+                        }
+                    SectionSeparator()
+                }
+
+                if viewModel.isLoadingMoreSearch {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .padding(.vertical, 12)
+                        Spacer()
+                    }
                 }
             }
         }
@@ -228,15 +318,24 @@ private final class AudioLibraryViewModel: ObservableObject {
     @Published var tracks: [AudioTrack] = []
     @Published var popularTracks: [AudioTrack] = []
     @Published var searchResults: [AudioTrack] = []
+    @Published var searchPlaylists: [AudioPlaylist] = []
     @Published var isLoading = false
     @Published var isLoadingPopular = false
+    @Published var isLoadingMorePopular = false
+    @Published var hasMorePopular = true
     @Published var isSearching = false
+    @Published var isLoadingMoreSearch = false
+    @Published var hasMoreSearchResults = true
     @Published var errorMessage: String?
 
     private var loadedOwnerID: Int?
     private var didLoadPopular = false
+    private let popularPageSize = 50
     private var searchWorkItem: DispatchWorkItem?
     private var searchGeneration = 0
+    private var searchOffset = 0
+    private var lastSearchQuery = ""
+    private let searchPageSize = 50
 
     func load(ownerID: Int, force: Bool = false, completion: (() -> Void)? = nil) {
         if !force, loadedOwnerID == ownerID, (!playlists.isEmpty || !tracks.isEmpty) {
@@ -290,18 +389,47 @@ private final class AudioLibraryViewModel: ObservableObject {
         }
 
         isLoadingPopular = true
+        hasMorePopular = true
         errorMessage = nil
-        AudioService.shared.getPopularTracks(count: 100) { [weak self] result in
+        AudioService.shared.getPopularTracks(offset: 0, count: popularPageSize) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 switch result {
                 case .success(let tracks):
                     self.popularTracks = tracks
+                    self.hasMorePopular = tracks.count >= self.popularPageSize
                     self.didLoadPopular = true
                 case .failure(let error):
                     self.errorMessage = error.localizedDescription
                 }
                 self.isLoadingPopular = false
+                completion?()
+            }
+        }
+    }
+
+    func loadMorePopular(completion: (() -> Void)? = nil) {
+        guard !isLoadingPopular, !isLoadingMorePopular, hasMorePopular else {
+            completion?()
+            return
+        }
+
+        isLoadingMorePopular = true
+
+        AudioService.shared.getPopularTracks(offset: popularTracks.count, count: popularPageSize) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else {
+                    completion?()
+                    return
+                }
+                switch result {
+                case .success(let tracks):
+                    self.popularTracks.append(contentsOf: tracks)
+                    self.hasMorePopular = tracks.count >= self.popularPageSize
+                case .failure:
+                    self.hasMorePopular = false
+                }
+                self.isLoadingMorePopular = false
                 completion?()
             }
         }
@@ -315,37 +443,64 @@ private final class AudioLibraryViewModel: ObservableObject {
 
         guard !trimmed.isEmpty else {
             searchResults = []
+            searchPlaylists = []
             isSearching = false
+            searchOffset = 0
+            hasMoreSearchResults = true
+            lastSearchQuery = ""
             errorMessage = nil
             completion?()
             return
         }
 
+        lastSearchQuery = trimmed
+
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, generation == self.searchGeneration else { return }
             self.isSearching = true
+            self.searchOffset = 0
+            self.hasMoreSearchResults = true
             self.searchResults = []
+            self.searchPlaylists = []
             self.errorMessage = nil
-            AudioService.shared.searchTracks(query: trimmed, count: 100) { [weak self] result in
+
+            let group = DispatchGroup()
+            var tracksError: String?
+
+            group.enter()
+            AudioService.shared.searchTracks(query: trimmed, offset: 0, count: self.searchPageSize) { result in
                 DispatchQueue.main.async {
-                    guard let self = self else {
-                        completion?()
-                        return
-                    }
-                    guard generation == self.searchGeneration else {
-                        completion?()
-                        return
-                    }
+                    guard generation == self.searchGeneration else { return }
                     switch result {
                     case .success(let tracks):
                         self.searchResults = tracks
+                        self.hasMoreSearchResults = tracks.count >= self.searchPageSize
                     case .failure(let error):
-                        self.searchResults = []
-                        self.errorMessage = error.localizedDescription
+                        tracksError = error.localizedDescription
                     }
-                    self.isSearching = false
-                    completion?()
+                    group.leave()
                 }
+            }
+
+            group.enter()
+            AudioService.shared.searchPlaylists(query: trimmed, offset: 0, count: 10) { result in
+                DispatchQueue.main.async {
+                    guard generation == self.searchGeneration else { return }
+                    switch result {
+                    case .success(let playlists):
+                        self.searchPlaylists = playlists
+                    case .failure:
+                        break
+                    }
+                    group.leave()
+                }
+            }
+
+            group.notify(queue: .main) {
+                guard generation == self.searchGeneration else { return }
+                self.errorMessage = tracksError
+                self.isSearching = false
+                completion?()
             }
         }
 
@@ -354,6 +509,35 @@ private final class AudioLibraryViewModel: ObservableObject {
             DispatchQueue.main.async(execute: work)
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: work)
+        }
+    }
+
+    func loadMoreSearchResults(completion: (() -> Void)? = nil) {
+        guard !isSearching, !isLoadingMoreSearch, hasMoreSearchResults, !lastSearchQuery.isEmpty else {
+            completion?()
+            return
+        }
+
+        isLoadingMoreSearch = true
+        let currentOffset = searchOffset + searchResults.count
+        let generation = searchGeneration
+
+        AudioService.shared.searchTracks(query: lastSearchQuery, offset: currentOffset, count: searchPageSize) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self, generation == self.searchGeneration else {
+                    completion?()
+                    return
+                }
+                switch result {
+                case .success(let tracks):
+                    self.searchResults.append(contentsOf: tracks)
+                    self.hasMoreSearchResults = tracks.count >= self.searchPageSize
+                case .failure:
+                    self.hasMoreSearchResults = false
+                }
+                self.isLoadingMoreSearch = false
+                completion?()
+            }
         }
     }
 }
