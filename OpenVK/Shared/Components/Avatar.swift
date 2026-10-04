@@ -10,10 +10,16 @@ struct Avatar: View {
     var size: CGFloat = 42
     var refreshOnAppear = false
     var refreshToken: UUID?
+    var placeholderImageName: String?
+    var isChat = false
+
+    private var avatarShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: size * (isChat ? 0.24 : 0.5), style: .continuous)
+    }
 
     var body: some View {
         ZStack {
-            Circle()
+            avatarShape
                 .fill(Color(.tertiarySystemFill))
                 .frame(width: size, height: size)
 
@@ -25,17 +31,27 @@ struct Avatar: View {
                     placeholder: { placeholder }
                 )
                     .frame(width: size, height: size)
-                    .clipShape(Circle())
+                    .clipShape(avatarShape)
             } else {
                 placeholder
+                    .frame(width: size, height: size)
+                    .clipShape(avatarShape)
             }
         }
     }
 
     private var placeholder: some View {
-        Image(systemName: "person.fill")
-            .font(.system(size: size * 0.5))
-            .foregroundColor(Color(.secondaryLabel))
+        Group {
+            if let placeholderImageName {
+                Image(placeholderImageName)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "person.fill")
+                    .font(.system(size: size * 0.5))
+                    .foregroundColor(Color(.secondaryLabel))
+            }
+        }
     }
 }
 
