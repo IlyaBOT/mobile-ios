@@ -129,6 +129,13 @@ struct ConversationRow: View {
                             .foregroundColor(.appAccent)
                     }
 
+                    if conversation.isImportant {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Важный чат")
+                    }
+
                     Spacer(minLength: 4)
                     if conversation.lastMessageOutgoing {
                         MessageReadReceiptIcon(isRead: conversation.lastMessageReadState == 1)
