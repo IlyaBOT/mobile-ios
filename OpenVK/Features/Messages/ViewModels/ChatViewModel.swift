@@ -278,6 +278,64 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func restore(message: ChatMessage) {
+        guard message.id > 0, message.isDeleted else { return }
+        service.restoreMessage(peerID: conversation.id, messageID: message.id) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.load()
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func toggleImportant(message: ChatMessage) {
+        guard message.id > 0, !message.isDeleted else { return }
+        let newValue = !message.isImportant
+        service.markMessageImportant(peerID: conversation.id, messageID: message.id, important: newValue) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                if let index = self.messages.firstIndex(where: { $0.id == message.id }) {
+                    self.messages[index].isImportant = newValue
+                }
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func togglePin(message: ChatMessage) {
+        guard message.id > 0, !message.isDeleted else { return }
+        if message.isPinned {
+            service.unpinMessage(peerID: conversation.id) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    for index in self.messages.indices {
+                        self.messages[index].isPinned = false
+                    }
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        } else {
+            service.pinMessage(peerID: conversation.id, messageID: message.id) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    for index in self.messages.indices {
+                        self.messages[index].isPinned = self.messages[index].id == message.id
+                    }
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     func loadStickerPacks() {
         guard stickerPacks.isEmpty, !isLoadingStickerPacks else { return }
         if let cachedPacks = service.cachedStickerPacks() {
@@ -410,8 +468,11 @@ final class ChatViewModel: ObservableObject {
         observer = NotificationCenter.default.addObserver(forName: .openvkLongPollDidReceiveEvent, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor [weak self] in
                 guard let self, let type = note.userInfo?["type"] as? Int else { return }
-                if type == 3 {
-                    self.handleReadFlagEvent(note)
+                if type == 2 || type == 3 {
+                    self.handleMessageFlagEvent(note, setting: type == 2)
+                    if type == 3 {
+                        self.handleReadFlagEvent(note)
+                    }
                 } else if type == 13 {
                     self.handleDeletedMessageEvent(note)
                 } else if type == 7 {
@@ -514,6 +575,21 @@ final class ChatViewModel: ObservableObject {
                     : name
             }
             self.updateTypingText()
+        }
+    }
+
+    private func handleMessageFlagEvent(_ note: Notification, setting: Bool) {
+        guard let peerID = note.userInfo?["peerID"] as? Int, peerID == conversation.id,
+              let messageID = note.userInfo?["messageID"] as? Int,
+              let event = note.userInfo?["event"] as? [Any], event.count > 2,
+              let mask = event[2] as? Int,
+              let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
+
+        if mask & 8 == 8 {
+            messages[index].isImportant = setting
+        }
+        if mask & 256 == 256 {
+            messages[index].isPinned = setting
         }
     }
 
