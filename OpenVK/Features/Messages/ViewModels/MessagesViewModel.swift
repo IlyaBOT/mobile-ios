@@ -90,7 +90,9 @@ final class MessagesViewModel: ObservableObject {
                     self.isSearching = false
                     switch result {
                     case .success(let page):
-                        self.searchResults = page.conversations
+                        self.searchResults = page.conversations.map { result in
+                            self.conversations.first(where: { $0.id == result.id }) ?? result
+                        }
                     case .failure(let error):
                         self.searchResults = []
                         self.errorMessage = error.localizedDescription
@@ -234,6 +236,32 @@ final class MessagesViewModel: ObservableObject {
                             isUnanswered: item.isUnanswered
                         )
                     }
+                    self.searchResults = self.searchResults.map { item in
+                        guard item.id == conversation.id else { return item }
+                        var copy = item
+                        copy = Conversation(
+                            id: copy.id,
+                            peer: copy.peer,
+                            lastMessage: copy.lastMessage,
+                            lastMessageAuthorName: copy.lastMessageAuthorName,
+                            lastMessageOutgoing: copy.lastMessageOutgoing,
+                            updatedAt: copy.updatedAt,
+                            unreadCount: 0,
+                            lastMessageId: copy.lastMessageId,
+                            lastMessageReadState: copy.lastMessageReadState,
+                            isChat: copy.isChat,
+                            isChatMember: copy.isChatMember,
+                            chatMemberCount: copy.chatMemberCount,
+                            inReadMessageID: copy.inReadMessageID,
+                            outReadMessageID: copy.outReadMessageID,
+                            inReadConversationMessageID: copy.inReadConversationMessageID,
+                            outReadConversationMessageID: copy.outReadConversationMessageID,
+                            lastConversationMessageID: copy.lastConversationMessageID,
+                            isImportant: copy.isImportant,
+                            isUnanswered: copy.isUnanswered
+                        )
+                        return copy
+                    }
                     AuthService.shared.fetchCounters()
                 case .failure(let error):
                     self.errorMessage = error.localizedDescription
@@ -317,6 +345,7 @@ final class MessagesViewModel: ObservableObject {
     private func removeConversationLocally(_ conversation: Conversation) {
         let oldCount = conversations.count
         conversations.removeAll { $0.id == conversation.id }
+        searchResults.removeAll { $0.id == conversation.id }
         if conversations.count != oldCount {
             totalCount = max(0, totalCount - 1)
         }
