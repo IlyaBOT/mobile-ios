@@ -21,6 +21,7 @@ struct ChatInfoView: View {
 
     @StateObject private var model: ChatInfoViewModel
     @State private var showsAddMembers = false
+    @State private var showsSettingsEditor = false
     @State private var activeAlert: ActiveAlert?
     @State private var memberToExclude: ChatMember?
     @State private var preview: ChatMaterial?
@@ -47,7 +48,7 @@ struct ChatInfoView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if model.canEdit {
-                    Button("Изм.") {}
+                    Button("Изм.") { showsSettingsEditor = true }
                 }
             }
         }
@@ -58,6 +59,9 @@ struct ChatInfoView: View {
         }
         .sheet(isPresented: $showsAddMembers) {
             ChatAddParticipantsView(model: model)
+        }
+        .sheet(isPresented: $showsSettingsEditor) {
+            ChatSettingsEditorView(model: model)
         }
         .sheet(item: $preview) { item in
             ChatMaterialPreviewView(item: item)
@@ -134,7 +138,7 @@ struct ChatInfoView: View {
                 }
 
                 Button {
-                    activeAlert = .unavailable
+                    showsSettingsEditor = true
                 } label: {
                     actionLabel(title: "Ещё", icon: "ellipsis")
                 }
@@ -149,7 +153,7 @@ struct ChatInfoView: View {
     }
 
     private var settingsRow: some View {
-        Button { activeAlert = .unavailable } label: {
+        Button { showsSettingsEditor = true } label: {
             HStack {
                 SettingsRow(icon: "gearshape", title: "Настройка беседы", iconColor: .gray)
                 Image(systemName: "chevron.right")
@@ -394,6 +398,81 @@ struct ChatInfoView: View {
         if last == 1 { return "участник" }
         if (2...4).contains(last) { return "участника" }
         return "участников"
+    }
+}
+
+private struct ChatSettingsEditorView: View {
+    @Environment(\.presentationMode) private var presentationMode
+    @ObservedObject var model: ChatInfoViewModel
+    @State private var title: String
+    @State private var confirmsInviteReset = false
+
+    init(model: ChatInfoViewModel) {
+        self.model = model
+        _title = State(initialValue: model.title)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Беседа")) {
+                    TextField("Название", text: $title)
+                        .disabled(!model.canEditTitle)
+                }
+
+                if model.canSeeInviteLink || model.canRegenerateInviteLink {
+                    Section(header: Text("Ссылка-приглашение")) {
+                        if model.canSeeInviteLink {
+                            Button {
+                                model.copyInviteLink()
+                            } label: {
+                                Label("Скопировать ссылку", systemImage: "doc.on.doc")
+                            }
+                        }
+
+                        if model.canRegenerateInviteLink {
+                            Button(role: .destructive) {
+                                confirmsInviteReset = true
+                            } label: {
+                                Label("Создать новую ссылку", systemImage: "arrow.clockwise")
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Настройка беседы")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Отмена") { presentationMode.wrappedValue.dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Сохранить") {
+                        model.updateTitle(title) { success in
+                            if success { presentationMode.wrappedValue.dismiss() }
+                        }
+                    }
+                    .disabled(
+                        !model.canEditTitle
+                        || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || model.isWorking
+                    )
+                }
+            }
+            .confirmationDialog(
+                "Создать новую ссылку?",
+                isPresented: $confirmsInviteReset,
+                titleVisibility: .visible
+            ) {
+                Button("Создать новую ссылку", role: .destructive) {
+                    model.regenerateInviteLink()
+                }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Предыдущая ссылка-приглашение перестанет работать. Новая ссылка будет скопирована в буфер обмена.")
+            }
+        }
+        .navigationViewStyle(.stack)
     }
 }
 
