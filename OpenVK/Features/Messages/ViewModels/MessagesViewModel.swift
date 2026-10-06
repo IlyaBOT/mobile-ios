@@ -11,6 +11,9 @@ final class MessagesViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var isLoadingMore = false
     @Published private(set) var typingUsersByConversation: [Int: [String]] = [:]
+    @Published private(set) var searchResults: [Conversation] = []
+    @Published private(set) var isSearching = false
+    @Published var searchQuery = ""
     @Published var errorMessage: String?
 
     private let service: MessagesServiceProtocol
@@ -20,6 +23,13 @@ final class MessagesViewModel: ObservableObject {
     private var hasMore = true
     private var typingExpirations: [Int: [Int: Date]] = [:]
     private var typingNames: [Int: [Int: String]] = [:]
+    private var searchWorkItem: DispatchWorkItem?
+
+    var displayedConversations: [Conversation] {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? conversations
+            : searchResults
+    }
 
     init(service: MessagesServiceProtocol = MessagesService.shared) {
         self.service = service
@@ -54,8 +64,42 @@ final class MessagesViewModel: ObservableObject {
     }
 
     func loadMoreIfNeeded(after conversation: Conversation) {
+        guard searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard conversation.id == conversations.last?.id else { return }
         loadMore()
+    }
+
+    func updateSearch(query: String) {
+        searchQuery = query
+        searchWorkItem?.cancel()
+
+        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            searchResults = []
+            isSearching = false
+            return
+        }
+
+        isSearching = true
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == value else { return }
+            self.service.searchConversations(query: value) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == value else { return }
+                    self.isSearching = false
+                    switch result {
+                    case .success(let page):
+                        self.searchResults = page.conversations
+                    case .failure(let error):
+                        self.searchResults = []
+                        self.errorMessage = error.localizedDescription
+                    }
+                }
+            }
+        }
+        searchWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
     }
 
     func handleLongPollEvent(_ notification: Notification) {
@@ -180,7 +224,14 @@ final class MessagesViewModel: ObservableObject {
                             lastMessageReadState: item.lastMessageReadState,
                             isChat: item.isChat,
                             isChatMember: item.isChatMember,
-                            chatMemberCount: item.chatMemberCount
+                            chatMemberCount: item.chatMemberCount,
+                            inReadMessageID: item.inReadMessageID,
+                            outReadMessageID: item.outReadMessageID,
+                            inReadConversationMessageID: item.inReadConversationMessageID,
+                            outReadConversationMessageID: item.outReadConversationMessageID,
+                            lastConversationMessageID: item.lastConversationMessageID,
+                            isImportant: item.isImportant,
+                            isUnanswered: item.isUnanswered
                         )
                     }
                     AuthService.shared.fetchCounters()
@@ -189,6 +240,34 @@ final class MessagesViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    func toggleImportant(_ conversation: Conversation) {
+        let newValue = !conversation.isImportant
+        service.markConversationImportant(peerID: conversation.id, important: newValue) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.updateConversationImportance(id: conversation.id, important: newValue)
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func updateConversationImportance(id: Int, important: Bool) {
+        func updated(_ items: [Conversation]) -> [Conversation] {
+            items.map { item in
+                guard item.id == id else { return item }
+                var copy = item
+                copy.isImportant = important
+                return copy
+            }
+        }
+        conversations = updated(conversations)
+        searchResults = updated(searchResults)
     }
 
     func deleteConversation(_ conversation: Conversation) {
