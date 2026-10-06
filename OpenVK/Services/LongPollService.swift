@@ -88,22 +88,27 @@ final class LongPollService {
         defer { task = nil }
 
         var server: LongPollServerResponse?
+        var protocolVersion = 3
         while isRunning && !Task.isCancelled && AuthService.shared.isAuthenticated {
             do {
                 if server == nil {
                     server = try await APIClient.shared.call(
                         method: "messages.getLongPollServer",
-                        parameters: ["lp_version": "3", "need_pts": "1"],
+                        parameters: ["lp_version": String(protocolVersion), "need_pts": "1"],
                         httpMethod: "GET",
                         as: LongPollServerResponse.self
                     )
                 }
 
                 guard let currentServer = server else { continue }
-                let result = try await poll(currentServer)
+                let result = try await poll(currentServer, version: protocolVersion)
 
                 if let failed = result.failed {
                     if failed == 2 || failed == 3 {
+                        server = nil
+                    } else if failed == 4 {
+                        let advertised = result.maxVersion ?? max(1, protocolVersion - 1)
+                        protocolVersion = max(result.minVersion ?? 1, min(3, advertised))
                         server = nil
                     } else if failed == 1, let nextTS = result.ts {
                         server = LongPollServerResponse(
@@ -141,14 +146,14 @@ final class LongPollService {
         }
     }
 
-    private func poll(_ server: LongPollServerResponse) async throws -> LongPollResponse {
+    private func poll(_ server: LongPollServerResponse, version: Int) async throws -> LongPollResponse {
         var components = URLComponents(string: normalizedServerURL(server.server))
         components?.queryItems = [
             URLQueryItem(name: "key", value: server.key),
             URLQueryItem(name: "ts", value: String(server.ts)),
             URLQueryItem(name: "pts", value: server.pts.map(String.init)),
             URLQueryItem(name: "mode", value: "490"),
-            URLQueryItem(name: "version", value: "3")
+            URLQueryItem(name: "version", value: String(version))
         ].filter { $0.value != nil }
 
         guard let url = components?.url else { throw APIError.invalidURL }
@@ -235,17 +240,23 @@ final class LongPollService {
 private struct LongPollResponse: Decodable {
     let failed: Int?
     let ts: Int?
+    let minVersion: Int?
+    let maxVersion: Int?
     let updates: [[LongPollValue]]
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         failed = try? FlexibleInt.decode(from: container, forKey: .failed)
         ts = try? FlexibleInt.decode(from: container, forKey: .ts)
+        minVersion = try? FlexibleInt.decode(from: container, forKey: .minVersion)
+        maxVersion = try? FlexibleInt.decode(from: container, forKey: .maxVersion)
         updates = (try? container.decode([[LongPollValue]].self, forKey: .updates)) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
         case failed, ts, updates
+        case minVersion = "min_version"
+        case maxVersion = "max_version"
     }
 }
 
