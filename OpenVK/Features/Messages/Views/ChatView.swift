@@ -316,6 +316,9 @@ struct ChatView: View {
                             text = message.text
                             isComposerFocused = true
                         },
+                        onTogglePin: { viewModel.togglePin(message: $0) },
+                        onToggleImportant: { viewModel.toggleImportant(message: $0) },
+                        onRestore: { viewModel.restore(message: $0) },
                         onDelete: { messageToDelete = $0 }
                     )
                     .id(message.id)
@@ -1672,6 +1675,9 @@ private struct MessageBubble: View {
     let onReply: (ChatMessage) -> Void
     let onReplyTap: (ChatReply) -> Void
     let onEdit: (ChatMessage) -> Void
+    let onTogglePin: (ChatMessage) -> Void
+    let onToggleImportant: (ChatMessage) -> Void
+    let onRestore: (ChatMessage) -> Void
     let onDelete: (ChatMessage) -> Void
     @State private var swipeOffset: CGFloat = 0
 
@@ -1727,11 +1733,33 @@ private struct MessageBubble: View {
                 }
             }
             if !message.isDeleted, message.id > 0 {
+                Button {
+                    onTogglePin(message)
+                } label: {
+                    Label(
+                        message.isPinned ? "Открепить" : "Закрепить",
+                        systemImage: message.isPinned ? "pin.slash" : "pin"
+                    )
+                }
+                Button {
+                    onToggleImportant(message)
+                } label: {
+                    Label(
+                        message.isImportant ? "Убрать из важных" : "Пометить важным",
+                        systemImage: message.isImportant ? "star.slash" : "star"
+                    )
+                }
                 Button(role: .destructive) {
                     onDelete(message)
                 } label: {
                     Label("Удалить", systemImage: "trash")
                         .foregroundStyle(.red)
+                }
+            } else if message.isDeleted, message.id > 0 {
+                Button {
+                    onRestore(message)
+                } label: {
+                    Label("Восстановить", systemImage: "arrow.uturn.backward")
                 }
             }
             }
