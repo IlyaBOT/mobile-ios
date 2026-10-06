@@ -19,6 +19,16 @@ struct Conversation: Identifiable, Hashable {
     var isChat: Bool
     var isChatMember: Bool = true
     var chatMemberCount: Int? = nil
+
+    // Modern OpenVK IM conversation state.
+    var inReadMessageID: Int = 0
+    var outReadMessageID: Int = 0
+    var inReadConversationMessageID: Int = 0
+    var outReadConversationMessageID: Int = 0
+    var lastConversationMessageID: Int = 0
+    var isImportant: Bool = false
+    var isUnanswered: Bool = false
+
     var isGroup: Bool { peer.isGroup == true }
 }
 
@@ -59,7 +69,14 @@ struct VKConversationItem: Decodable {
 struct VKConversationInfo: Decodable {
     let peer: VKConversationPeer
     let lastMessageId: Int?
+    let lastConversationMessageId: Int?
     let unreadCount: Int?
+    let inRead: Int?
+    let outRead: Int?
+    let inReadCmid: Int?
+    let outReadCmid: Int?
+    let important: Bool?
+    let unanswered: Bool?
     let chatSettings: VKChatSettings?
     let canWrite: VKConversationCanWrite?
 }
@@ -517,7 +534,10 @@ struct VKMessagesHistoryResponse: Decodable {
 
 struct VKHistoryMessage: Decodable {
     let id: Int?
+    let conversationMessageId: Int?
+    let randomId: Int?
     let fromId: Int?
+    let peerId: Int?
     let date: Int?
     let out: Int?
     let body: String?
@@ -525,6 +545,9 @@ struct VKHistoryMessage: Decodable {
     let attachments: [VKConversationAttachment]?
     let deleted: Int?
     let readState: Int?
+    let readBy: [Int]?
+    let important: Bool?
+    let isPinned: Int?
     let action: VKMessageAction?
     let actionMid: Int?
     let edited: Bool?
@@ -635,6 +658,15 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     let deliveryStatus: MessageDeliveryStatus?
     let endsChatParticipation: Bool
 
+    // Modern OpenVK IM metadata. These are mutable so local actions can update
+    // the UI immediately while Long Poll/API history later reconciles state.
+    var conversationMessageID: Int? = nil
+    var randomID: Int? = nil
+    var peerID: Int? = nil
+    var readBy: [Int] = []
+    var isImportant: Bool = false
+    var isPinned: Bool = false
+
     var allPhotos: [ChatPhoto] {
         (richAttachments?.flatMap(\.photos) ?? photos)
             + (forwardedMessages ?? []).flatMap(\.photos)
@@ -704,6 +736,12 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         isDeleted = message.deleted == 1
         isEdited = message.edited == true || message.editedAt != nil
         deliveryStatus = isOutgoing ? ((message.readState ?? 0) == 1 ? .read : .unread) : nil
+        conversationMessageID = message.conversationMessageId
+        randomID = message.randomId
+        peerID = message.peerId
+        readBy = message.readBy ?? []
+        isImportant = message.important == true
+        isPinned = message.isPinned == 1
     }
 
     private init(
@@ -728,7 +766,13 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         isDeleted: Bool,
         isEdited: Bool = false,
         deliveryStatus: MessageDeliveryStatus?,
-        endsChatParticipation: Bool = false
+        endsChatParticipation: Bool = false,
+        conversationMessageID: Int? = nil,
+        randomID: Int? = nil,
+        peerID: Int? = nil,
+        readBy: [Int] = [],
+        isImportant: Bool = false,
+        isPinned: Bool = false
     ) {
         self.id = id
         self.text = text
@@ -752,6 +796,12 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.isEdited = isEdited
         self.deliveryStatus = deliveryStatus
         self.endsChatParticipation = endsChatParticipation
+        self.conversationMessageID = conversationMessageID
+        self.randomID = randomID
+        self.peerID = peerID
+        self.readBy = readBy
+        self.isImportant = isImportant
+        self.isPinned = isPinned
     }
 
     static func pending(text: String, replyTo: ChatMessage? = nil) -> ChatMessage {
@@ -830,7 +880,14 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             systemEventText: systemEventText,
             isDeleted: isDeleted,
             isEdited: isEdited,
-            deliveryStatus: status
+            deliveryStatus: status,
+            endsChatParticipation: endsChatParticipation,
+            conversationMessageID: conversationMessageID,
+            randomID: randomID,
+            peerID: peerID,
+            readBy: readBy,
+            isImportant: isImportant,
+            isPinned: isPinned
         )
     }
 
@@ -841,7 +898,9 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
             documents: documents, gifs: gifs, richAttachments: richAttachments,
             forwardedMessages: forwardedMessages, reply: reply,
-            systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus
+            systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus,
+            endsChatParticipation: endsChatParticipation, conversationMessageID: conversationMessageID,
+            randomID: randomID, peerID: peerID, readBy: readBy, isImportant: isImportant, isPinned: isPinned
         )
     }
 
@@ -852,7 +911,9 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
             documents: documents, gifs: gifs, richAttachments: richAttachments,
             forwardedMessages: forwardedMessages, reply: reply,
-            systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus
+            systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus,
+            endsChatParticipation: endsChatParticipation, conversationMessageID: conversationMessageID,
+            randomID: randomID, peerID: peerID, readBy: readBy, isImportant: isImportant, isPinned: isPinned
         )
     }
 
