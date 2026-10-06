@@ -36,6 +36,13 @@ struct MessagesView: View {
                         .accessibilityLabel("Написать сообщение")
                     }
                 }
+                .searchable(
+                    text: Binding(
+                        get: { viewModel.searchQuery },
+                        set: { viewModel.updateSearch(query: $0) }
+                    ),
+                    prompt: "Поиск чатов"
+                )
                 .sheet(isPresented: $showCreateChat) {
                     CreateChatView()
                 }
@@ -101,7 +108,7 @@ struct MessagesView: View {
                 AuthService.shared.fetchCounters()
             } else if (61...64).contains(type) {
                 viewModel.handleLongPollEvent(notification)
-            } else if [0, 3, 5, 7, 13, 14, 51, 52].contains(type) {
+            } else if [0, 1, 2, 3, 5, 7, 10, 11, 12, 13, 14, 51, 52].contains(type) {
                 viewModel.load()
                 AuthService.shared.fetchCounters()
             } else if type == 80 {
@@ -123,17 +130,20 @@ struct MessagesView: View {
 
     @ViewBuilder
     private var content: some View {
-        if viewModel.isLoading && viewModel.conversations.isEmpty {
+        if viewModel.isSearching && !viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && viewModel.searchResults.isEmpty {
+            ProgressView("Поиск…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if viewModel.isLoading && viewModel.conversations.isEmpty {
             ProgressView("Загрузка чатов…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if viewModel.conversations.isEmpty {
+        } else if viewModel.displayedConversations.isEmpty {
             VStack(spacing: 12) {
-                Image(systemName: "bubble.left.and.bubble.right")
+                Image(systemName: viewModel.searchQuery.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
                     .font(.system(size: 42))
                     .foregroundColor(.secondary)
-                Text("Нет чатов")
+                Text(viewModel.searchQuery.isEmpty ? "Нет чатов" : "Ничего не найдено")
                     .font(.system(size: 17, weight: .semibold))
-                Text("Здесь появятся ваши личные сообщения")
+                Text(viewModel.searchQuery.isEmpty ? "Здесь появятся ваши личные сообщения" : "Попробуйте изменить запрос")
                     .font(.system(size: 15))
                     .foregroundColor(.secondary)
             }
@@ -141,7 +151,7 @@ struct MessagesView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List {
-                ForEach(viewModel.conversations) { conversation in
+                ForEach(viewModel.displayedConversations) { conversation in
                     NavigationLink {
                         ChatView(
                             conversation: conversation,
@@ -161,6 +171,15 @@ struct MessagesView: View {
                             } label: {
                                 Label("Пометить как прочитанное", systemImage: "envelope.open")
                             }
+                        }
+
+                        Button {
+                            viewModel.toggleImportant(conversation)
+                        } label: {
+                            Label(
+                                conversation.isImportant ? "Убрать из важных" : "Пометить важным",
+                                systemImage: conversation.isImportant ? "star.slash" : "star"
+                            )
                         }
 
                         if conversation.isChat && conversation.isChatMember {
