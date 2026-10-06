@@ -7,6 +7,7 @@ import Foundation
 
 protocol MessagesServiceProtocol {
     func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
+    func searchConversations(query: String, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
     func cachedHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool) -> MessagesPage?
     func cacheHistory(page: MessagesPage, peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool)
     func fetchHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool, completion: @escaping (Result<MessagesPage, Error>) -> Void)
@@ -22,6 +23,11 @@ protocol MessagesServiceProtocol {
     func leaveChat(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func editMessage(peerID: Int, messageID: Int, text: String, completion: @escaping (Result<Void, Error>) -> Void)
     func deleteMessage(peerID: Int, messageID: Int, forAll: Bool, completion: @escaping (Result<Void, Error>) -> Void)
+    func restoreMessage(peerID: Int, messageID: Int, completion: @escaping (Result<Void, Error>) -> Void)
+    func markMessageImportant(peerID: Int, messageID: Int, important: Bool, completion: @escaping (Result<Void, Error>) -> Void)
+    func markConversationImportant(peerID: Int, important: Bool, completion: @escaping (Result<Void, Error>) -> Void)
+    func pinMessage(peerID: Int, messageID: Int, completion: @escaping (Result<Void, Error>) -> Void)
+    func unpinMessage(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
 }
 
 final class MessagesService: MessagesServiceProtocol {
@@ -252,6 +258,102 @@ final class MessagesService: MessagesServiceProtocol {
         }
     }
 
+    func searchConversations(
+        query: String,
+        completion: @escaping (Result<ConversationsPage, Error>) -> Void
+    ) {
+        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            completion(.success(ConversationsPage(totalCount: 0, conversations: [])))
+            return
+        }
+
+        client.call(
+            method: "messages.searchConversations",
+            parameters: [
+                "q": value,
+                "extended": "1",
+                "fields": "id,first_name,last_name,screen_name,photo_100,photo_200,online,last_seen,verified"
+            ],
+            httpMethod: "GET",
+            as: VKConversationsResponse.self
+        ) { result in
+            switch result {
+            case .success(let response):
+                let profiles = response.profiles ?? []
+                let groups = response.groups ?? []
+                let conversations = (response.items ?? []).map {
+                    self.makeConversation(from: $0, profiles: profiles, groups: groups)
+                }
+                completion(.success(ConversationsPage(
+                    totalCount: response.count ?? conversations.count,
+                    conversations: conversations
+                )))
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func restoreMessage(peerID: Int, messageID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.restore",
+            parameters: ["peer_id": String(peerID), "message_id": String(messageID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func markMessageImportant(peerID: Int, messageID: Int, important: Bool, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.markAsImportant",
+            parameters: [
+                "peer_id": String(peerID),
+                "message_ids": String(messageID),
+                "important": important ? "1" : "0"
+            ],
+            httpMethod: "POST",
+            as: [Int].self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func markConversationImportant(peerID: Int, important: Bool, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.markAsImportantConversation",
+            parameters: ["peer_id": String(peerID), "important": important ? "1" : "0"],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func pinMessage(peerID: Int, messageID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.pin",
+            parameters: ["peer_id": String(peerID), "message_id": String(messageID)],
+            httpMethod: "POST",
+            as: VKHistoryMessage.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func unpinMessage(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.unpin",
+            parameters: ["peer_id": String(peerID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
     func fetchConversations(
         offset: Int = 0,
         count: Int = 30,
@@ -362,10 +464,17 @@ final class MessagesService: MessagesServiceProtocol {
             lastMessageId: item.conversation.lastMessageId ?? message?.id ?? 0,
             lastMessageReadState: message?.readState,
             isChat: isChat,
-            isChatMember: !["left", "kicked"].contains(item.conversation.chatSettings?.state?.lowercased())
+            isChatMember: !["left", "kicked", "out"].contains(item.conversation.chatSettings?.state?.lowercased())
                 && item.conversation.canWrite?.allowed != false
-                && item.conversation.canWrite?.reason != 915,
-            chatMemberCount: item.conversation.chatSettings?.membersCount
+                && ![915, 916, 917].contains(item.conversation.canWrite?.reason ?? 0),
+            chatMemberCount: item.conversation.chatSettings?.membersCount,
+            inReadMessageID: item.conversation.inRead ?? 0,
+            outReadMessageID: item.conversation.outRead ?? 0,
+            inReadConversationMessageID: item.conversation.inReadCmid ?? 0,
+            outReadConversationMessageID: item.conversation.outReadCmid ?? 0,
+            lastConversationMessageID: item.conversation.lastConversationMessageId ?? 0,
+            isImportant: item.conversation.important == true,
+            isUnanswered: item.conversation.unanswered == true
         )
     }
 
