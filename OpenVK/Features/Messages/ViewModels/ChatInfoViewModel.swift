@@ -50,6 +50,8 @@ final class ChatInfoViewModel: ObservableObject {
 
     var canAddMembers: Bool { canInvite }
     var canEdit: Bool { canChangeInfo || canChangePin || canChangeInviteLink || canInvite || canPromote || canModerate }
+    var canEditTitle: Bool { canChangeInfo }
+    var canRegenerateInviteLink: Bool { canChangeInviteLink }
     var memberIDs: Set<Int> { Set(members.map(\.id)) }
 
     func load() {
@@ -147,15 +149,50 @@ final class ChatInfoViewModel: ObservableObject {
         }
     }
 
+    func updateTitle(_ newTitle: String, completion: @escaping (Bool) -> Void) {
+        let value = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canChangeInfo, !value.isEmpty, !isWorking else {
+            completion(false)
+            return
+        }
+        isWorking = true
+        Task {
+            do {
+                try await service.editTitle(peerID: conversation.id, title: value)
+                title = value
+                isWorking = false
+                completion(true)
+            } catch {
+                isWorking = false
+                errorMessage = error.localizedDescription
+                completion(false)
+            }
+        }
+    }
+
     func copyInviteLink() {
         guard canSeeInviteLink else { return }
         Task {
             do {
-                let link = try await service.getInviteLink(peerID: conversation.id)
+                let link = try await service.getInviteLink(peerID: conversation.id, reset: false)
                 UIPasteboard.general.url = link
             } catch {
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    func regenerateInviteLink() {
+        guard canChangeInviteLink, !isWorking else { return }
+        isWorking = true
+        Task {
+            do {
+                let link = try await service.getInviteLink(peerID: conversation.id, reset: true)
+                UIPasteboard.general.url = link
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isWorking = false
         }
     }
 
