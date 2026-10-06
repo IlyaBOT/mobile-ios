@@ -92,7 +92,8 @@ protocol ChatInfoServiceProtocol {
     func removeUser(peerID: Int, userID: Int) async throws
     func getMuted(peerID: Int) async throws -> Bool
     func setMuted(peerID: Int, muted: Bool) async throws
-    func getInviteLink(peerID: Int) async throws -> URL
+    func editTitle(peerID: Int, title: String) async throws
+    func getInviteLink(peerID: Int, reset: Bool) async throws -> URL
 }
 
 struct ChatInfoService: ChatInfoServiceProtocol {
@@ -241,8 +242,25 @@ struct ChatInfoService: ChatInfoServiceProtocol {
         ], httpMethod: "POST", as: Int.self)
     }
 
-    func getInviteLink(peerID: Int) async throws -> URL {
-        let response = try await client.call(method: "messages.getInviteLink", parameters: ["peer_id": String(peerID)], httpMethod: "GET", as: ChatInviteLinkResponse.self)
+    func editTitle(peerID: Int, title: String) async throws {
+        let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard peerID > 2_000_000_000, !value.isEmpty else { throw APIError.invalidResponse }
+        let chatID = peerID - 2_000_000_000
+        let _: Int = try await client.call(
+            method: "messages.editChat",
+            parameters: ["chat_id": String(chatID), "title": value],
+            httpMethod: "POST",
+            as: Int.self
+        )
+    }
+
+    func getInviteLink(peerID: Int, reset: Bool = false) async throws -> URL {
+        let response = try await client.call(
+            method: "messages.getInviteLink",
+            parameters: ["peer_id": String(peerID), "reset": reset ? "1" : "0"],
+            httpMethod: "GET",
+            as: ChatInviteLinkResponse.self
+        )
         guard let url = URL(string: response.link) else { throw URLError(.badURL) }
         return url
     }
