@@ -2670,7 +2670,9 @@ private struct ChatPhotoCollage: View {
     let width: CGFloat
     let onTap: (ChatPhoto) -> Void
 
+    private let spacing: CGFloat = 2
     private var visiblePhotos: [ChatPhoto] { Array(photos.prefix(9)) }
+
     private var columnCount: Int {
         switch visiblePhotos.count {
         case 1: return 1
@@ -2680,17 +2682,62 @@ private struct ChatPhotoCollage: View {
     }
 
     var body: some View {
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: columnCount)
-        LazyVGrid(columns: columns, spacing: 2) {
+        Group {
+            if let photo = visiblePhotos.first, visiblePhotos.count == 1 {
+                singlePhoto(photo)
+            } else {
+                photoGrid
+            }
+        }
+        // Use an explicit width instead of relying on the image's intrinsic
+        // size. On iOS 26 a resizable image inside LazyVGrid + aspectRatio
+        // can otherwise collapse to its fitted content width, leaving the
+        // rest of the message bubble background exposed.
+        .frame(width: width, alignment: .leading)
+    }
+
+    private func singlePhoto(_ photo: ChatPhoto) -> some View {
+        let ratio = max(CGFloat(photo.aspectRatio), 0.1)
+        let naturalHeight = width / ratio
+        let height = min(max(naturalHeight, 120), 300)
+
+        return Button { onTap(photo) } label: {
+            CachedRemoteImage(url: photo.url, contentMode: .fill) {
+                Color(.secondarySystemBackground)
+                    .overlay { ProgressView() }
+            }
+            .frame(width: width, height: height)
+            .clipped()
+            .contentShape(Rectangle())
+        }
+        .frame(width: width, height: height)
+        .buttonStyle(.plain)
+    }
+
+    private var photoGrid: some View {
+        let columns = Array(
+            repeating: GridItem(.flexible(minimum: 0), spacing: spacing),
+            count: columnCount
+        )
+        let cellHeight: CGFloat = {
+            switch visiblePhotos.count {
+            case 2: return 180
+            case 3, 4: return 145
+            default: return 100
+            }
+        }()
+
+        return LazyVGrid(columns: columns, spacing: spacing) {
             ForEach(visiblePhotos) { photo in
                 Button { onTap(photo) } label: {
-                    CachedRemoteImage(url: photo.url, contentMode: .fit) {
+                    CachedRemoteImage(url: photo.url, contentMode: .fill) {
                         Color(.secondarySystemBackground)
                             .overlay { ProgressView() }
                     }
                     .frame(maxWidth: .infinity)
-                    .aspectRatio(CGFloat(photo.aspectRatio), contentMode: .fit)
-                    .frame(maxHeight: visiblePhotos.count == 1 ? 300 : 180)
+                    .frame(height: cellHeight)
+                    .clipped()
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
