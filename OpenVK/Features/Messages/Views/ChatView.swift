@@ -119,7 +119,7 @@ struct ChatView: View {
                     if !viewModel.isNearBottom {
                         jumpToLatestButton
                             .padding(.trailing, 16)
-                            .padding(.bottom, max(56, composerOverlayHeight) + 12)
+                            .padding(.bottom, max(jumpButtonMinimumComposerHeight, composerOverlayHeight) + 12)
                     }
                 }
                 .onPreferenceChange(ChatComposerHeightPreference.self) { composerOverlayHeight = $0 }
@@ -344,6 +344,24 @@ struct ChatView: View {
                 .padding(.bottom, 12)
             }
         }
+    }
+
+    private var jumpButtonMinimumComposerHeight: CGFloat {
+        // ChatComposerHeightPreference can briefly report only the compact
+        // input-row height while the keyboard/reply UI is animating on iOS 26.
+        // Keep the jump button above every interactive composer layer so it
+        // never covers the reply/edit cancel control.
+        var height: CGFloat = 56
+
+        if replyToMessage != nil || editingMessage != nil {
+            height += 56
+        }
+
+        if !selectedPhotos.isEmpty {
+            height += 90
+        }
+
+        return height
     }
 
     private var jumpToLatestButton: some View {
