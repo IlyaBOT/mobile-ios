@@ -1809,6 +1809,8 @@ private struct MessageBubble: View {
     private var messageContent: some View {
         if let stickerURL = message.stickerURL {
             sticker(url: stickerURL, animationURL: message.stickerAnimationURL)
+        } else if let wall = singleWallAttachment {
+            wallAttachmentBubble(wall)
         } else if usesRichAttachmentBubble {
             richAttachmentBubble
         } else if let video = message.videos.first {
@@ -1837,6 +1839,72 @@ private struct MessageBubble: View {
         let allPhotos = attachments.allSatisfy { if case .photo = $0 { return true }; return false }
         let allDocuments = attachments.allSatisfy { if case .document = $0 { return true }; return false }
         return !allPhotos && !allDocuments
+    }
+
+    // A single shared wall post uses the entire bubble width, like media
+    // attachments, instead of inheriting the 13-point inset for mixed content.
+    private var singleWallAttachment: ChatWallPost? {
+        guard (message.forwardedMessages ?? []).isEmpty,
+              let attachments = message.richAttachments,
+              attachments.count == 1,
+              case .wall(let wall) = attachments[0] else {
+            return nil
+        }
+        return wall
+    }
+
+    private func wallAttachmentBubble(_ wall: ChatWallPost) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if isChat, !message.isOutgoing, showsSenderDetails, let senderName = message.senderName {
+                Button { onProfileTap(sender) } label: {
+                    Text(senderName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.appAccent)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 13)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
+            }
+
+            if let reply = message.reply {
+                Button { onReplyTap(reply) } label: {
+                    replyPreview(reply, width: photoBubbleWidth - 26)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 13)
+                .padding(.top, 8)
+                .padding(.bottom, 6)
+            }
+
+            if !message.text.isEmpty {
+                messageText
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            ChatRichAttachmentCard(
+                attachment: .wall(wall),
+                mediaWidth: photoBubbleWidth,
+                isOutgoing: message.isOutgoing,
+                onPhotoTap: onPhotoTap,
+                onVideoTap: onVideoTap,
+                onWallTap: onWallTap
+            )
+            .frame(width: photoBubbleWidth, alignment: .leading)
+
+            HStack {
+                Spacer(minLength: 0)
+                messageMetadata
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+        }
+        .foregroundStyle(message.isOutgoing ? .white : .primary)
+        .frame(width: photoBubbleWidth, alignment: .leading)
+        .background(attachmentBubbleColor)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var richAttachmentBubble: some View {
@@ -2451,7 +2519,9 @@ private struct ChatRichAttachmentCard: View {
         }
         .foregroundColor(Color(.label))
         .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Explicitly fill the allocated attachment width; don't size the
+        // wall preview based on the intrinsic width of nested post media.
+        .frame(width: max(1, mediaWidth), alignment: .leading)
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay {
