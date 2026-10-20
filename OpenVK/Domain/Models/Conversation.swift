@@ -127,13 +127,19 @@ struct VKMessageLinkAttachment: Decodable {
     let url: String?
 }
 
+struct VKWallViewCount: Decodable {
+    let count: Int?
+}
+
 struct VKMessageWallAttachment: Decodable {
     let id: Int?
     let ownerId: Int?
     let fromId: Int?
+    let date: Int?
     let text: String?
     let authorName: String?
     let authorAvatar: String?
+    let views: VKWallViewCount?
     let attachments: [VKConversationAttachment]?
 }
 
@@ -196,6 +202,8 @@ struct ChatLink: Hashable, Codable {
 struct ChatWallPost: Hashable, Codable {
     let authorName: String
     let authorAvatarURL: URL?
+    let publicationDate: Date?
+    let viewCount: Int?
     let text: String
     let url: URL?
     let attachments: [ChatWallAttachment]
@@ -209,8 +217,13 @@ struct ChatWallPost: Hashable, Codable {
     }
 
     init(_ wall: VKMessageWallAttachment, depth: Int) {
-        authorName = wall.authorName?.isEmpty == false ? wall.authorName! : "Запись"
+        let ownerID = wall.fromId ?? wall.ownerId ?? 0
+        authorName = wall.authorName?.isEmpty == false
+            ? wall.authorName!
+            : (ownerID < 0 ? "Сообщество" : "Пользователь")
         authorAvatarURL = wall.authorAvatar.flatMap(URL.init)
+        publicationDate = wall.date.flatMap { $0 > 0 ? Date(timeIntervalSince1970: TimeInterval($0)) : nil }
+        viewCount = wall.views?.count
         text = wall.text ?? ""
         if let ownerID = wall.ownerId ?? wall.fromId, let id = wall.id {
             url = URL(string: "\(AppConfig.webBaseURL.absoluteString)wall\(ownerID)_\(id)")
