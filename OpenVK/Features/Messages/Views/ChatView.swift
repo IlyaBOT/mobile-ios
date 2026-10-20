@@ -354,7 +354,9 @@ struct ChatView: View {
         var height: CGFloat = 56
 
         if replyToMessage != nil || editingMessage != nil {
-            height += 56
+            // A half-banner offset is enough to keep the control clear while
+            // avoiding the oversized gap above the reply/edit panel.
+            height += 28
         }
 
         if !selectedPhotos.isEmpty {
