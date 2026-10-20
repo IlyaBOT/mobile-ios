@@ -2346,6 +2346,14 @@ private struct MessageBubble: View {
     }
 }
 
+private struct ChatWallLookupResponse: Decodable {
+    let items: [ChatWallLookupItem]
+}
+
+private struct ChatWallLookupItem: Decodable {
+    let views: VKWallViewCount?
+}
+
 private struct ChatRichAttachmentCard: View {
     let attachment: ChatRichAttachment
     let mediaWidth: CGFloat
@@ -2354,6 +2362,7 @@ private struct ChatRichAttachmentCard: View {
     let onVideoTap: (ChatVideo) -> Void
     let onWallTap: (ChatWallPost) -> Void
     @ObservedObject private var audioPlayer = AudioPlayerService.shared
+    @State private var remotePostViews: Int?
 
     @ViewBuilder
     var body: some View {
@@ -2476,60 +2485,177 @@ private struct ChatRichAttachmentCard: View {
     }
 
     private func wallCard(_ wall: ChatWallPost) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+        let photos = wall.attachments.compactMap { attachment -> ChatPhoto? in
+            if case .photo(let photo) = attachment { return photo }
+            return nil
+        }
+        let videos = wall.attachments.compactMap { attachment -> ChatVideo? in
+            if case .video(let video) = attachment { return video }
+            return nil
+        }
+        let audio = wall.attachments.compactMap { attachment -> ChatAudio? in
+            if case .audio(let track) = attachment { return track }
+            return nil
+        }
+        let otherAttachments = wall.attachments.filter { attachment in
+            switch attachment {
+            case .photo, .video, .audio: return false
+            default: return true
+            }
+        }
+        let contentWidth = max(1, mediaWidth - 20)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 9) {
+                Image(systemName: "arrowshape.turn.up.right")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+
                 if let avatarURL = wall.authorAvatarURL {
                     CachedRemoteImage(url: avatarURL, contentMode: .fill) {
-                        Color(.tertiarySystemFill)
+                        Image(systemName: "person.crop.circle.fill")
+                            .resizable()
+                            .foregroundStyle(.secondary)
                     }
-                    .frame(width: 28, height: 28)
+                    .frame(width: 36, height: 36)
                     .clipShape(Circle())
                 } else {
-                    Image(systemName: "text.alignleft")
-                        .frame(width: 28, height: 28)
+                    Image(systemName: "person.crop.circle.fill")
+                        .resizable()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, height: 36)
                 }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(wall.authorName).font(.caption.weight(.semibold)).lineLimit(1)
-                    Text("Запись").font(.caption2).foregroundColor(Color(.secondaryLabel))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(wall.authorName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.appAccent)
+                        .lineLimit(1)
+                    if let publicationDate = wall.publicationDate {
+                        Text(publicationDate.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 0)
-                if let url = wall.url {
-                    Link(destination: url) {
-                        Image(systemName: "arrow.up.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(Color(.label))
-                            .frame(width: 28, height: 28)
-                    }
-                    .accessibilityLabel("Открыть запись")
-                }
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+
             if !wall.text.isEmpty {
-                Text(wall.text).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                Text(wall.text)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
             }
-            ForEach(Array(wall.attachments.enumerated()), id: \.offset) { _, nested in
+
+            // All visual media comes directly after the post text.
+            if !photos.isEmpty {
+                ChatPhotoCollage(photos: photos, width: contentWidth, onTap: onPhotoTap)
+                    .frame(width: contentWidth)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 4)
+            }
+
+            ForEach(videos) { video in
                 ChatRichAttachmentCard(
-                    attachment: nested.richAttachment,
-                    mediaWidth: mediaWidth - 20,
+                    attachment: .video(video),
+                    mediaWidth: contentWidth,
                     isOutgoing: false,
                     onPhotoTap: onPhotoTap,
                     onVideoTap: onVideoTap,
                     onWallTap: onWallTap
                 )
+                .frame(width: contentWidth)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 4)
+            }
+
+            // Documents, polls, links and other content follow media,
+            // while audio tracks are deliberately kept at the very end.
+            ForEach(Array(otherAttachments.enumerated()), id: \.offset) { _, attachment in
+                ChatRichAttachmentCard(
+                    attachment: attachment.richAttachment,
+                    mediaWidth: contentWidth,
+                    isOutgoing: false,
+                    onPhotoTap: onPhotoTap,
+                    onVideoTap: onVideoTap,
+                    onWallTap: onWallTap
+                )
+                .frame(width: contentWidth, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+            }
+
+            ForEach(audio, id: \.self) { track in
+                ChatRichAttachmentCard(
+                    attachment: .audio(track),
+                    mediaWidth: contentWidth,
+                    isOutgoing: false,
+                    onPhotoTap: onPhotoTap,
+                    onVideoTap: onVideoTap,
+                    onWallTap: onWallTap
+                )
+                .frame(width: contentWidth, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+            }
+
+            if wall.url != nil {
+                Button {
+                    onWallTap(wall)
+                } label: {
+                    Text("Открыть пост")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color.appAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(Color.appAccent, lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+            }
+
+            if let views = wall.viewCount ?? remotePostViews {
+                Label(views.formatted(), systemImage: "eye")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
             }
         }
-        .foregroundColor(Color(.label))
-        .padding(10)
-        // Explicitly fill the allocated attachment width; don't size the
-        // wall preview based on the intrinsic width of nested post media.
+        .foregroundStyle(Color(.label))
+        .padding(.bottom, 10)
         .frame(width: max(1, mediaWidth), alignment: .leading)
-        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .overlay {
-            Button { onWallTap(wall) } label: {
-                Color.clear.contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .task(id: wall.url) {
+            remotePostViews = nil
+            guard wall.viewCount == nil, let reference = wall.postReference else { return }
+            do {
+                // The wall attachment payload has no view counter. The full
+                // wall.getById response exposes views.count when available.
+                let details: ChatWallLookupResponse = try await APIClient.shared.call(
+                    method: "wall.getById",
+                    parameters: [
+                        "posts": "\(reference.ownerID)_\(reference.postID)",
+                        "extended": "1"
+                    ],
+                    as: ChatWallLookupResponse.self
+                )
+                remotePostViews = details.items.first?.views?.count
+            } catch {
+                // Some instances do not expose views; never display a fake 0.
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Открыть запись и комментарии")
         }
     }
 }
