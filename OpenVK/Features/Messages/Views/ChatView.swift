@@ -2592,7 +2592,7 @@ private struct ChatRichAttachmentCard: View {
                 .padding(.bottom, 6)
             }
 
-            ForEach(audio, id: \.self) { track in
+            ForEach(Array(audio.enumerated()), id: \.offset) { _, track in
                 ChatRichAttachmentCard(
                     attachment: .audio(track),
                     mediaWidth: contentWidth,
