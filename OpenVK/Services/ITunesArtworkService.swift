@@ -99,7 +99,7 @@ final class ITunesArtworkService {
                 self.userDefaults.set(cacheValue, forKey: self.userDefaultsPrefix + cacheKey)
 
                 self.lock.withLock {
-                    self.activeTasks.removeValue(forKey: cacheKey)
+                    _ = self.activeTasks.removeValue(forKey: cacheKey)
                 }
 
                 return result
