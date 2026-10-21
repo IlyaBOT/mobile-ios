@@ -87,94 +87,13 @@ struct ChatView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            if #available(iOS 26.0, *) {
-                ZStack(alignment: .bottom) {
-                    tableMessageHistory(viewportWidth: geometry.size.width, showsJumpButton: false)
-                        .scrollEdgeEffectStyle(nil, for: [.top, .bottom])
-                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+        chatPresentation
+    }
 
-                    Group {
-                        if viewModel.canSendMessages {
-                            messageComposer(maxHeight: geometry.size.height / 2)
-                                .padding(.horizontal, 12)
-                                .padding(.bottom, 8)
-                        } else {
-                            Text("Вы больше не можете отправлять сообщения")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(.thinMaterial, in: Capsule())
-                                .padding(.bottom, 10)
-                        }
-                    }
-                    .background(GeometryReader { composerGeometry in
-                        Color.clear.preference(key: ChatComposerHeightPreference.self, value: composerGeometry.size.height)
-                    })
-
-                }
-                .frame(width: geometry.size.width, height: geometry.size.height)
-                .overlay(alignment: .bottomTrailing) {
-                    if !viewModel.isNearBottom {
-                        jumpToLatestButton
-                            .padding(.trailing, 16)
-                            .padding(.bottom, max(jumpButtonMinimumComposerHeight, composerOverlayHeight) + 12)
-                    }
-                }
-                .onPreferenceChange(ChatComposerHeightPreference.self) { composerOverlayHeight = $0 }
-            } else {
-                tableMessageHistory(viewportWidth: geometry.size.width)
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        if viewModel.canSendMessages {
-                        legacyMessageComposer
-                        } else {
-                            Text("Вы больше не можете отправлять сообщения")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .padding(.vertical, 12)
-                        }
-                    }
-            }
-        }
-        .background {
-            ChatWallpaperBackground()
-                .ignoresSafeArea()
-        }
-        .onChange(of: text) { viewModel.sendTyping(for: $0) }
-        .onAppear {
-            AudioPlayerService.shared.isExpanded = false
-            AudioPlayerService.shared.isOverlayHidden = true
-            if let userID = AuthService.shared.currentUser?.uid {
-                recentStickers = RecentStickerStore().load(userID: userID)
-            }
-            if #unavailable(iOS 16.0) {
-                LegacyChatTabBarHider.setTabBarHidden(true)
-            }
-        }
-        .onDisappear {
-            AudioPlayerService.shared.isOverlayHidden = false
-            viewModel.cacheCurrentPosition()
-            if #unavailable(iOS 16.0) {
-                LegacyChatTabBarHider.setTabBarHidden(false)
-            }
-        }
-        .onChange(of: scenePhase) { phase in
-            if phase != .active { viewModel.cacheCurrentPosition() }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .chatNavigationBarBackground()
-        .chatTabBarHidden()
-        .chatTitleToolbar {
-            chatToolbarTitle
-        }
-        .task {
-            viewModel.load()
-            viewModel.startListening()
-        }
-        .background(profileNavigationLink)
-        .background(chatInfoNavigationLink)
-        .background(wallPostNavigationLink)
+    // Keep the large view's layout, lifecycle, navigation and presentation
+    // modifiers in separate expressions for the Swift 6 type checker.
+    private var chatPresentation: some View {
+        chatNavigation
         .alert("Не удалось загрузить сообщения", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
             Button("ОК", role: .cancel) {}
         } message: { Text(viewModel.errorMessage ?? "Попробуйте ещё раз") }
@@ -205,6 +124,124 @@ struct ChatView: View {
             ChatVideoPlayer(video: video)
         }
     }
+
+    private var chatNavigation: some View {
+        chatLifecycle
+            .navigationBarTitleDisplayMode(.inline)
+            .chatNavigationBarBackground()
+            .chatTabBarHidden()
+            .chatTitleToolbar {
+                chatToolbarTitle
+            }
+            .task {
+                viewModel.load()
+                viewModel.startListening()
+            }
+            .background(profileNavigationLink)
+            .background(chatInfoNavigationLink)
+            .background(wallPostNavigationLink)
+    }
+
+    private var chatLifecycle: some View {
+        chatLayout
+            .background {
+                ChatWallpaperBackground()
+                    .ignoresSafeArea()
+            }
+            .onChange(of: text) { viewModel.sendTyping(for: $0) }
+            .onAppear {
+                AudioPlayerService.shared.isExpanded = false
+                AudioPlayerService.shared.isOverlayHidden = true
+                if let userID = AuthService.shared.currentUser?.uid {
+                    recentStickers = RecentStickerStore().load(userID: userID)
+                }
+                if #unavailable(iOS 16.0) {
+                    LegacyChatTabBarHider.setTabBarHidden(true)
+                }
+            }
+            .onDisappear {
+                AudioPlayerService.shared.isOverlayHidden = false
+                viewModel.cacheCurrentPosition()
+                if #unavailable(iOS 16.0) {
+                    LegacyChatTabBarHider.setTabBarHidden(false)
+                }
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase != .active { viewModel.cacheCurrentPosition() }
+            }
+    }
+
+    private var chatLayout: some View {
+        GeometryReader { geometry in
+            #if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                modernChatLayout(geometry)
+            } else {
+                legacyChatLayout(width: geometry.size.width)
+            }
+            #else
+            legacyChatLayout(width: geometry.size.width)
+            #endif
+        }
+    }
+
+    private func legacyChatLayout(width: CGFloat) -> some View {
+        tableMessageHistory(viewportWidth: width)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if viewModel.canSendMessages {
+                    legacyMessageComposer
+                } else {
+                    Text("Вы больше не можете отправлять сообщения")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 12)
+                }
+            }
+    }
+
+    #if compiler(>=6.2)
+    @available(iOS 26.0, *)
+    private func modernChatLayout(_ geometry: GeometryProxy) -> some View {
+        ZStack(alignment: .bottom) {
+            tableMessageHistory(viewportWidth: geometry.size.width, showsJumpButton: false)
+                .scrollEdgeEffectStyle(nil, for: [.top, .bottom])
+                .ignoresSafeArea(.container, edges: [.top, .bottom])
+
+            Group {
+                if viewModel.canSendMessages {
+                    messageComposer(maxHeight: geometry.size.height / 2)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                } else {
+                    Text("Вы больше не можете отправлять сообщения")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.thinMaterial, in: Capsule())
+                        .padding(.bottom, 10)
+                }
+            }
+            .background(GeometryReader { composerGeometry in
+                Color.clear.preference(
+                    key: ChatComposerHeightPreference.self,
+                    value: composerGeometry.size.height
+                )
+            })
+        }
+        .frame(width: geometry.size.width, height: geometry.size.height)
+        .overlay(alignment: .bottomTrailing) {
+            if !viewModel.isNearBottom {
+                jumpToLatestButton
+                    .padding(.trailing, 16)
+                    .padding(.bottom, max(jumpButtonMinimumComposerHeight, composerOverlayHeight) + 12)
+            }
+        }
+        .onPreferenceChange(ChatComposerHeightPreference.self) {
+            composerOverlayHeight = $0
+        }
+    }
+    #endif
 
     private var chatToolbarTitle: some View {
         Group {
@@ -283,7 +320,9 @@ struct ChatView: View {
             messages: viewModel.messages,
             stickerPickerPresented: isEmojiPanelPresented,
             bottomOverlayHeight: {
+                #if compiler(>=6.2)
                 if #available(iOS 26.0, *) { return composerOverlayHeight }
+                #endif
                 return 0
             }(),
             pageSize: viewModel.pageSize,
@@ -459,6 +498,7 @@ struct ChatView: View {
             && message.isOutgoing == neighbor.isOutgoing
     }
 
+    #if compiler(>=6.2)
     @available(iOS 26.0, *)
     private func messageComposer(maxHeight: CGFloat) -> some View {
         let maximumLines = max(1, Int((maxHeight - 20) / 22))
@@ -563,6 +603,8 @@ struct ChatView: View {
             }
         }
     }
+
+    #endif
 
     private var hasMessageText: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -765,6 +807,7 @@ struct ChatView: View {
 
     @ViewBuilder
     private func messageActionBanner(title: String, subtitle: String, cancel: @escaping () -> Void) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             messageActionBannerContent(title: title, subtitle: subtitle, cancel: cancel)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -772,6 +815,10 @@ struct ChatView: View {
             messageActionBannerContent(title: title, subtitle: subtitle, cancel: cancel)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+        #else
+        messageActionBannerContent(title: title, subtitle: subtitle, cancel: cancel)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        #endif
     }
 
     private func messageActionBannerContent(title: String, subtitle: String, cancel: @escaping () -> Void) -> some View {
@@ -861,10 +908,12 @@ private struct ChatTableHistory: UIViewRepresentable {
         table.contentInsetAdjustmentBehavior = .never
         table.keyboardDismissMode = .interactive
         table.tableFooterView = UIView(frame: .zero)
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             table.topEdgeEffect.isHidden = true
             table.bottomEdgeEffect.isHidden = true
         }
+        #endif
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.didTapBackground))
         tap.cancelsTouchesInView = false
         table.addGestureRecognizer(tap)
@@ -1431,6 +1480,7 @@ private struct StickerPickerArtwork: View {
 
 extension View {
     @ViewBuilder func chatTitleToolbar<Title: View>(@ViewBuilder title: @escaping () -> Title) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             self.toolbar {
                 ToolbarItem(placement: .principal) { title() }
@@ -1441,9 +1491,15 @@ extension View {
                 ToolbarItem(placement: .principal) { title() }
             }
         }
+        #else
+        self.toolbar {
+            ToolbarItem(placement: .principal) { title() }
+        }
+        #endif
     }
 
     @ViewBuilder func chatStickerPickerSurface() -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             self
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -1453,17 +1509,27 @@ extension View {
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+        #else
+        self
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        #endif
     }
 
     @ViewBuilder func chatJumpButtonGlass() -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             self.glassEffect(.regular, in: Circle())
         } else {
             self.background(.thinMaterial, in: Circle())
         }
+        #else
+        self.background(.thinMaterial, in: Circle())
+        #endif
     }
 
     @ViewBuilder func chatToolbarCapsule(animationToken: String) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             self
                 .padding(.horizontal, 10)
@@ -1473,6 +1539,9 @@ extension View {
         } else {
             self
         }
+        #else
+        self
+        #endif
     }
 
     @ViewBuilder func chatNavigationBarBackground() -> some View {
