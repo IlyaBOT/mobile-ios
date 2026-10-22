@@ -1962,6 +1962,7 @@ private struct MessageBubble: View {
                 onWallTap: onWallTap
             )
             .frame(width: photoBubbleWidth, alignment: .leading)
+            .padding(.top, 10)
 
             HStack {
                 Spacer(minLength: 0)
@@ -2573,38 +2574,41 @@ private struct ChatRichAttachmentCard: View {
             }
         }
         let contentWidth = max(1, mediaWidth - 20)
+        let primaryColor: Color = isOutgoing ? .white : Color(.label)
+        let secondaryColor: Color = isOutgoing ? .white.opacity(0.75) : Color(.secondaryLabel)
+        let linkColor: Color = isOutgoing ? .white : Color.appAccent
 
         return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 9) {
                 Image(systemName: "arrowshape.turn.up.right")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryColor)
                     .frame(width: 18)
 
                 if let avatarURL = wall.authorAvatarURL {
                     CachedRemoteImage(url: avatarURL, contentMode: .fill) {
                         Image(systemName: "person.crop.circle.fill")
                             .resizable()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(secondaryColor)
                     }
                     .frame(width: 36, height: 36)
                     .clipShape(Circle())
                 } else {
                     Image(systemName: "person.crop.circle.fill")
                         .resizable()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(secondaryColor)
                         .frame(width: 36, height: 36)
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(wall.authorName)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.appAccent)
+                        .foregroundStyle(linkColor)
                         .lineLimit(1)
                     if let publicationDate = wall.publicationDate {
                         Text(publicationDate.formatted(date: .abbreviated, time: .shortened))
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(secondaryColor)
                     }
                 }
                 Spacer(minLength: 0)
@@ -2681,12 +2685,12 @@ private struct ChatRichAttachmentCard: View {
                 } label: {
                     Text("Открыть пост")
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Color.appAccent)
+                        .foregroundStyle(linkColor)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 9)
                         .overlay {
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .strokeBorder(Color.appAccent, lineWidth: 1)
+                                .strokeBorder(linkColor, lineWidth: 1)
                         }
                 }
                 .buttonStyle(.plain)
@@ -2697,16 +2701,16 @@ private struct ChatRichAttachmentCard: View {
             if let views = wall.viewCount ?? remotePostViews {
                 Label(views.formatted(), systemImage: "eye")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryColor)
                     .padding(.horizontal, 12)
                     .padding(.top, 10)
             }
         }
-        .foregroundStyle(Color(.label))
+        .foregroundStyle(primaryColor)
         .padding(.bottom, 10)
         .frame(width: max(1, mediaWidth), alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        // No nested card background: inherit the containing message bubble's
+        // blue (outgoing) or gray (incoming) fill and rounded corners.
         .task(id: wall.url) {
             remotePostViews = nil
             guard wall.viewCount == nil, let reference = wall.postReference else { return }
