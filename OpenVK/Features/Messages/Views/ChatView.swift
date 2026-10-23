@@ -2776,7 +2776,7 @@ private struct ChatRichAttachmentCard: View {
         .frame(width: max(1, mediaWidth), alignment: .leading)
         // No nested card background: inherit the containing message bubble's
         // blue (outgoing) or gray (incoming) fill and rounded corners.
-
+    }
 }
 
 private struct ChatForwardedMessageCard: View {
