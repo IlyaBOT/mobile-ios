@@ -28,6 +28,13 @@ protocol MessagesServiceProtocol {
     func markConversationImportant(peerID: Int, important: Bool, completion: @escaping (Result<Void, Error>) -> Void)
     func pinMessage(peerID: Int, messageID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func unpinMessage(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
+    func fetchPinnedMessage(peerID: Int, completion: @escaping (Result<ChatMessage?, Error>) -> Void)
+}
+
+extension MessagesServiceProtocol {
+    func fetchPinnedMessage(peerID: Int, completion: @escaping (Result<ChatMessage?, Error>) -> Void) {
+        completion(.success(nil))
+    }
 }
 
 final class MessagesService: MessagesServiceProtocol {
@@ -351,6 +358,32 @@ final class MessagesService: MessagesServiceProtocol {
             as: Int.self
         ) { result in
             completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func fetchPinnedMessage(
+        peerID: Int,
+        completion: @escaping (Result<ChatMessage?, Error>) -> Void
+    ) {
+        client.call(
+            method: "messages.getConversationsById",
+            parameters: ["peer_ids": String(peerID), "extended": "1"],
+            httpMethod: "GET",
+            as: VKConversationsResponse.self
+        ) { result in
+            switch result {
+            case .success(let response):
+                guard let pinned = response.items?.first?.conversation.chatSettings?.pinnedMessage,
+                      let id = pinned.id, id > 0 else {
+                    completion(.success(nil))
+                    return
+                }
+                var message = ChatMessage(message: pinned, profiles: response.profiles ?? [])
+                message.isPinned = true
+                completion(.success(message))
+            case .failure(let error):
+                completion(.failure(error))
+            }
         }
     }
 
