@@ -446,6 +446,10 @@ private struct ChatSettingsEditorView: View {
     @ObservedObject var model: ChatInfoViewModel
     @State private var title: String
     @State private var confirmsInviteReset = false
+    @State private var confirmsAvatarDelete = false
+    @State private var showsAddMembers = false
+    @State private var memberToExclude: ChatMember?
+    @State private var selectedAvatar: PhotosPickerItem?
 
     init(model: ChatInfoViewModel) {
         self.model = model
@@ -456,8 +460,94 @@ private struct ChatSettingsEditorView: View {
         NavigationView {
             Form {
                 Section(header: Text("Беседа")) {
+                    if model.canEditTitle {
+                        PhotosPicker(selection: $selectedAvatar, matching: .images) {
+                            VStack(spacing: 8) {
+                                Avatar(
+                                    user: User(
+                                        uid: model.conversation.id,
+                                        username: "",
+                                        displayName: model.title,
+                                        avatarURL: model.photoURL
+                                    ),
+                                    size: 82,
+                                    placeholderImageName: "chat_default_100",
+                                    isChat: true
+                                )
+                                Label("Изменить фотографию", systemImage: "camera")
+                                    .font(.footnote)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                        }
+                        .disabled(model.isWorking)
+
+                        if model.photoURL != nil {
+                            Button(role: .destructive) {
+                                confirmsAvatarDelete = true
+                            } label: {
+                                Label("Удалить фотографию", systemImage: "trash")
+                            }
+                        }
+                    }
+
                     TextField("Название", text: $title)
                         .disabled(!model.canEditTitle)
+
+                    Text("Описание беседы пока нельзя изменять через API OpenVK.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if model.canAddMembers || !model.members.isEmpty {
+                    Section(header: Text("Участники")) {
+                        if model.canAddMembers {
+                            Button {
+                                showsAddMembers = true
+                            } label: {
+                                Label("Добавить участника", systemImage: "person.badge.plus")
+                            }
+                        }
+                        ForEach(model.members) { member in
+                            HStack(spacing: 10) {
+                                Avatar(user: member.user, size: 34)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(member.user.displayName)
+                                        .font(.subheadline)
+                                    if let role = member.roleTitle {
+                                        Text(role)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                                if model.canAssign(member) || model.canExclude(member) {
+                                    Menu {
+                                        if model.canAssign(member) {
+                                            Button {
+                                                model.setModerator(member, enabled: !member.isModerator)
+                                            } label: {
+                                                Label(
+                                                    member.isModerator ? "Снять администратора" : "Назначить администратором",
+                                                    systemImage: member.isModerator ? "person.crop.circle.badge.minus" : "star"
+                                                )
+                                            }
+                                        }
+                                        if model.canExclude(member) {
+                                            Button(role: .destructive) {
+                                                memberToExclude = member
+                                            } label: {
+                                                Label("Исключить из беседы", systemImage: "person.crop.circle.badge.xmark")
+                                            }
+                                        }
+                                    } label: {
+                                        Image(systemName: "ellipsis.circle")
+                                            .foregroundStyle(Color.appAccent)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 if model.canSeeInviteLink || model.canRegenerateInviteLink {
@@ -469,7 +559,6 @@ private struct ChatSettingsEditorView: View {
                                 Label("Скопировать ссылку", systemImage: "doc.on.doc")
                             }
                         }
-
                         if model.canRegenerateInviteLink {
                             Button(role: .destructive) {
                                 confirmsInviteReset = true
@@ -480,7 +569,7 @@ private struct ChatSettingsEditorView: View {
                     }
                 }
             }
-            .navigationTitle("Настройка беседы")
+            .navigationTitle("Изменить беседу")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -488,16 +577,56 @@ private struct ChatSettingsEditorView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Сохранить") {
-                        model.updateTitle(title) { success in
-                            if success { presentationMode.wrappedValue.dismiss() }
+                        if title.trimmingCharacters(in: .whitespacesAndNewlines) == model.title {
+                            presentationMode.wrappedValue.dismiss()
+                        } else {
+                            model.updateTitle(title) { success in
+                                if success { presentationMode.wrappedValue.dismiss() }
+                            }
                         }
                     }
                     .disabled(
-                        !model.canEditTitle
-                        || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || model.isWorking
+                        !model.canEditTitle ||
+                        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        model.isWorking
                     )
                 }
+            }
+            .onChange(of: selectedAvatar) { item in
+                guard let item else { return }
+                Task {
+                    guard let data = try? await item.loadTransferable(type: Data.self),
+                          let image = UIImage(data: data),
+                          let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
+                    model.updateAvatar(jpeg)
+                }
+            }
+            .sheet(isPresented: $showsAddMembers) {
+                ChatAddParticipantsView(model: model)
+            }
+            .confirmationDialog(
+                "Исключить участника из беседы?",
+                isPresented: Binding(
+                    get: { memberToExclude != nil },
+                    set: { if !$0 { memberToExclude = nil } }
+                )
+            ) {
+                if let memberToExclude {
+                    Button("Исключить", role: .destructive) {
+                        model.exclude(memberToExclude)
+                        self.memberToExclude = nil
+                    }
+                }
+                Button("Отмена", role: .cancel) { memberToExclude = nil }
+            }
+            .confirmationDialog(
+                "Удалить фотографию беседы?",
+                isPresented: $confirmsAvatarDelete
+            ) {
+                Button("Удалить фотографию", role: .destructive) {
+                    model.removeAvatar()
+                }
+                Button("Отмена", role: .cancel) {}
             }
             .confirmationDialog(
                 "Создать новую ссылку?",
@@ -509,7 +638,7 @@ private struct ChatSettingsEditorView: View {
                 }
                 Button("Отмена", role: .cancel) {}
             } message: {
-                Text("Предыдущая ссылка-приглашение перестанет работать. Новая ссылка будет скопирована в буфер обмена.")
+                Text("Предыдущая ссылка перестанет работать. Новая будет скопирована в буфер обмена.")
             }
         }
         .navigationViewStyle(.stack)
