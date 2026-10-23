@@ -259,11 +259,11 @@ struct ChatInfoService: ChatInfoServiceProtocol {
     func updateChatPhoto(peerID: Int, imageData: Data) async throws {
         guard peerID > 2_000_000_000 else { throw APIError.invalidResponse }
         let chatID = peerID - 2_000_000_000
-        let uploadServer: ChatUploadServer = try await client.call(
+        let uploadServer: ChatSettingsUploadServer = try await client.call(
             method: "photos.getChatUploadServer",
             parameters: ["chat_id": String(chatID)],
             httpMethod: "GET",
-            as: ChatUploadServer.self
+            as: ChatSettingsUploadServer.self
         )
         let data = try await client.upload(
             urlString: uploadServer.uploadUrl,
@@ -407,6 +407,10 @@ private struct ChatPushSettings: Decodable {
 
 private struct ChatInviteLinkResponse: Decodable {
     let link: String
+}
+
+private struct ChatSettingsUploadServer: Decodable {
+    let uploadUrl: String
 }
 
 private struct ChatSettingsImageUpload: Decodable {
