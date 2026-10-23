@@ -171,7 +171,7 @@ struct MessagesView: View {
         } else if viewModel.isLoading && viewModel.conversations.isEmpty {
             ProgressView("Загрузка чатов…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if viewModel.displayedConversations.isEmpty && viewModel.archivedConversations.isEmpty {
+        } else if viewModel.displayedConversations.isEmpty && !viewModel.hasArchivedConversations {
             VStack(spacing: 12) {
                 Image(systemName: viewModel.searchQuery.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
                     .font(.system(size: 42))
@@ -186,7 +186,7 @@ struct MessagesView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List {
-                if !viewModel.archivedConversations.isEmpty
+                if viewModel.hasArchivedConversations
                     && viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     NavigationLink {
                         archivedChats
