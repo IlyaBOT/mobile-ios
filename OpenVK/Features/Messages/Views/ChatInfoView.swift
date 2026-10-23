@@ -581,40 +581,46 @@ private struct ChatSettingsEditorView: View {
                 ChatAddParticipantsView(model: model)
             }
             .confirmationDialog(
-                "Исключить участника из беседы?",
+                "Подтвердить изменение",
                 isPresented: Binding(
-                    get: { memberToExclude != nil },
-                    set: { if !$0 { memberToExclude = nil } }
-                )
+                    get: { memberToExclude != nil || confirmsAvatarDelete || confirmsInviteReset },
+                    set: { if !$0 {
+                        memberToExclude = nil
+                        confirmsAvatarDelete = false
+                        confirmsInviteReset = false
+                    } }
+                ),
+                titleVisibility: .visible
             ) {
                 if let memberToExclude {
-                    Button("Исключить", role: .destructive) {
+                    Button("Исключить \(memberToExclude.user.displayName)", role: .destructive) {
                         model.exclude(memberToExclude)
                         self.memberToExclude = nil
                     }
+                } else if confirmsAvatarDelete {
+                    Button("Удалить фотографию", role: .destructive) {
+                        confirmsAvatarDelete = false
+                        model.removeAvatar()
+                    }
+                } else if confirmsInviteReset {
+                    Button("Создать новую ссылку", role: .destructive) {
+                        confirmsInviteReset = false
+                        model.regenerateInviteLink()
+                    }
                 }
-                Button("Отмена", role: .cancel) { memberToExclude = nil }
-            }
-            .confirmationDialog(
-                "Удалить фотографию беседы?",
-                isPresented: $confirmsAvatarDelete
-            ) {
-                Button("Удалить фотографию", role: .destructive) {
-                    model.removeAvatar()
+                Button("Отмена", role: .cancel) {
+                    memberToExclude = nil
+                    confirmsAvatarDelete = false
+                    confirmsInviteReset = false
                 }
-                Button("Отмена", role: .cancel) {}
-            }
-            .confirmationDialog(
-                "Создать новую ссылку?",
-                isPresented: $confirmsInviteReset,
-                titleVisibility: .visible
-            ) {
-                Button("Создать новую ссылку", role: .destructive) {
-                    model.regenerateInviteLink()
-                }
-                Button("Отмена", role: .cancel) {}
             } message: {
-                Text("Предыдущая ссылка перестанет работать. Новая будет скопирована в буфер обмена.")
+                if confirmsInviteReset {
+                    Text("Предыдущая ссылка перестанет работать. Новая будет скопирована в буфер обмена.")
+                } else if confirmsAvatarDelete {
+                    Text("Фотография беседы будет удалена.")
+                } else {
+                    Text("Участник потеряет доступ к беседе.")
+                }
             }
         }
         .navigationViewStyle(.stack)
