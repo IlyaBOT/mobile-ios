@@ -27,6 +27,7 @@ final class ChatInfoViewModel: ObservableObject {
     @Published private(set) var materials: [ChatMaterialSection: MaterialState] = [:]
     @Published var selectedSection: ChatMaterialSection = .members
     @Published var errorMessage: String?
+    @Published var shouldDismiss = false
 
     let conversation: Conversation
     private let service: ChatInfoServiceProtocol
@@ -168,6 +169,87 @@ final class ChatInfoViewModel: ObservableObject {
                 completion(false)
             }
         }
+    }
+
+    func updateAvatar(_ data: Data) {
+        guard canChangeInfo, !isWorking else { return }
+        isWorking = true
+        Task {
+            do {
+                try await service.updateChatPhoto(peerID: conversation.id, imageData: data)
+                // Force a fresh member/settings response after changing the image.
+                photoURL = nil
+                isWorking = false
+                refreshMembers()
+            } catch {
+                isWorking = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func removeAvatar() {
+        guard canChangeInfo, !isWorking else { return }
+        isWorking = true
+        Task {
+            do {
+                try await service.deleteChatPhoto(peerID: conversation.id)
+                photoURL = nil
+                isWorking = false
+                refreshMembers()
+            } catch {
+                isWorking = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func markAllAsRead() {
+        MessagesService.shared.markConversationAsRead(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success: AuthService.shared.fetchCounters()
+                case .failure(let error): self?.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func clearHistory() {
+        guard !isWorking else { return }
+        isWorking = true
+        MessagesService.shared.deleteConversation(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isWorking = false
+                switch result {
+                case .success: self.shouldDismiss = true
+                case .failure(let error): self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func leaveConversation() {
+        guard !isWorking else { return }
+        isWorking = true
+        MessagesService.shared.leaveChat(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isWorking = false
+                switch result {
+                case .success: self.shouldDismiss = true
+                case .failure(let error): self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func toggleArchive() {
+        ChatArchiveStore.setArchived(
+            !ChatArchiveStore.contains(conversation.id),
+            peerID: conversation.id
+        )
     }
 
     func copyInviteLink() {
