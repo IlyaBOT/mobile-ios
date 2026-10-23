@@ -2772,7 +2772,7 @@ private struct ChatRichAttachmentCard: View {
 
         }
         .foregroundStyle(primaryColor)
-        .padding(.bottom, 10)
+        .padding(.bottom, 4)
         .frame(width: max(1, mediaWidth), alignment: .leading)
         // No nested card background: inherit the containing message bubble's
         // blue (outgoing) or gray (incoming) fill and rounded corners.
