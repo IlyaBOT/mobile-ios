@@ -6,6 +6,27 @@
 import Foundation
 import SwiftUI
 
+// The server currently has no conversation archive endpoint. Keep archive
+// membership locally per OpenVK host and authenticated user.
+enum ChatArchiveStore {
+    static let didChange = Notification.Name("openvkChatArchiveDidChange")
+
+    private static var key: String {
+        "openvk.archive.\(AppConfig.currentHost).\(AuthService.shared.currentUser?.uid ?? 0)"
+    }
+
+    static func contains(_ peerID: Int) -> Bool {
+        UserDefaults.standard.array(forKey: key)?.compactMap { $0 as? Int }.contains(peerID) == true
+    }
+
+    static func setArchived(_ archived: Bool, peerID: Int) {
+        var ids = Set(UserDefaults.standard.array(forKey: key)?.compactMap { $0 as? Int } ?? [])
+        if archived { ids.insert(peerID) } else { ids.remove(peerID) }
+        UserDefaults.standard.set(Array(ids), forKey: key)
+        NotificationCenter.default.post(name: didChange, object: nil)
+    }
+}
+
 final class MessagesViewModel: ObservableObject {
     @Published private(set) var conversations: [Conversation] = []
     @Published private(set) var isLoading = false
@@ -14,6 +35,7 @@ final class MessagesViewModel: ObservableObject {
     @Published private(set) var searchResults: [Conversation] = []
     @Published private(set) var isSearching = false
     @Published var searchQuery = ""
+    @Published private(set) var archiveRevision = 0
     @Published var errorMessage: String?
 
     private let service: MessagesServiceProtocol
@@ -26,9 +48,25 @@ final class MessagesViewModel: ObservableObject {
     private var searchWorkItem: DispatchWorkItem?
 
     var displayedConversations: [Conversation] {
-        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let all = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? conversations
             : searchResults
+        return all.filter { !ChatArchiveStore.contains($0.id) }
+    }
+
+    var archivedConversations: [Conversation] {
+        let _ = archiveRevision
+        return conversations.filter { ChatArchiveStore.contains($0.id) }
+    }
+
+    func archive(_ conversation: Conversation, archived: Bool) {
+        ChatArchiveStore.setArchived(archived, peerID: conversation.id)
+        refreshArchive()
+    }
+
+    func refreshArchive() {
+        archiveRevision &+= 1
+        objectWillChange.send()
     }
 
     init(service: MessagesServiceProtocol = MessagesService.shared) {
