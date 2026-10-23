@@ -5,8 +5,10 @@
 
 import SwiftUI
 import AVKit
+import PhotosUI
 
 struct ChatInfoView: View {
+    @Environment(\.dismiss) private var dismiss
     private enum ActiveAlert: Identifiable {
         case unavailable
         case error(String)
@@ -22,6 +24,8 @@ struct ChatInfoView: View {
     @StateObject private var model: ChatInfoViewModel
     @State private var showsAddMembers = false
     @State private var showsSettingsEditor = false
+    @State private var confirmsClearHistory = false
+    @State private var confirmsLeaveChat = false
     @State private var activeAlert: ActiveAlert?
     @State private var memberToExclude: ChatMember?
     @State private var preview: ChatMaterial?
@@ -35,7 +39,6 @@ struct ChatInfoView: View {
             header
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
-            settingsRow
             sectionPicker
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
@@ -53,6 +56,9 @@ struct ChatInfoView: View {
             }
         }
         .onAppear { model.load() }
+        .onChange(of: model.shouldDismiss) { shouldDismiss in
+            if shouldDismiss { dismiss() }
+        }
         .onChange(of: model.selectedSection) { model.loadMaterials($0) }
         .onChange(of: model.errorMessage) { message in
             if let message { activeAlert = .error(message) }
@@ -65,6 +71,30 @@ struct ChatInfoView: View {
         }
         .sheet(item: $preview) { item in
             ChatMaterialPreviewView(item: item)
+        }
+        .confirmationDialog(
+            "Очистить переписку?",
+            isPresented: $confirmsClearHistory,
+            titleVisibility: .visible
+        ) {
+            Button("Очистить историю", role: .destructive) {
+                model.clearHistory()
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("История сообщений будет удалена из вашего списка диалогов.")
+        }
+        .confirmationDialog(
+            "Покинуть беседу?",
+            isPresented: $confirmsLeaveChat,
+            titleVisibility: .visible
+        ) {
+            Button("Выйти из беседы", role: .destructive) {
+                model.leaveConversation()
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Вы больше не будете участником этой беседы.")
         }
         .confirmationDialog(
             "Исключить участника из беседы?",
@@ -137,12 +167,35 @@ struct ChatInfoView: View {
                     actionLabel(title: "Поиск", icon: "magnifyingglass")
                 }
 
-                Button {
-                    showsSettingsEditor = true
+                Menu {
+                    Button {
+                        model.markAllAsRead()
+                    } label: {
+                        Label("Пометить всё прочитанным", systemImage: "envelope.open")
+                    }
+                    Button {
+                        model.toggleArchive()
+                    } label: {
+                        Label(
+                            ChatArchiveStore.contains(model.conversation.id)
+                                ? "Вернуть из архива" : "В архив",
+                            systemImage: "archivebox"
+                        )
+                    }
+                    Button(role: .destructive) {
+                        confirmsClearHistory = true
+                    } label: {
+                        Label("Очистить историю", systemImage: "bubble.left.and.bubble.right")
+                    }
+                    Button(role: .destructive) {
+                        confirmsLeaveChat = true
+                    } label: {
+                        Label("Выйти из беседы", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
                 } label: {
                     actionLabel(title: "Ещё", icon: "ellipsis")
                 }
-                .accessibilityLabel("Ещё")
+                .accessibilityLabel("Действия с беседой")
             }
             .buttonStyle(.plain)
             .padding(.top, 8)
@@ -150,19 +203,6 @@ struct ChatInfoView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 12)
-    }
-
-    private var settingsRow: some View {
-        Button { showsSettingsEditor = true } label: {
-            HStack {
-                SettingsRow(icon: "gearshape", title: "Настройка беседы", iconColor: .gray)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     private func actionLabel(title: String, icon: String) -> some View {
