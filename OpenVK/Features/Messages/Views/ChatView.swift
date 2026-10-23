@@ -144,6 +144,9 @@ struct ChatView: View {
 
     private var chatLifecycle: some View {
         chatLayout
+            .safeAreaInset(edge: .top, spacing: 0) {
+                pinnedMessageBanner
+            }
             .background {
                 ChatWallpaperBackground()
                     .ignoresSafeArea()
@@ -242,6 +245,48 @@ struct ChatView: View {
         }
     }
     #endif
+
+    @ViewBuilder
+    private var pinnedMessageBanner: some View {
+        if conversation.isChat, let pinned = viewModel.pinnedMessage {
+            Button {
+                viewModel.scrollTo(messageID: pinned.id)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.appAccent)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
+                            Text(pinned.senderName ?? "Закреплённое сообщение")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            Text(pinned.date, style: .date)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(pinned.text.isEmpty ? "Вложение" : pinned.text)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .foregroundStyle(.primary)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.secondarySystemBackground))
+                .overlay(alignment: .bottom) {
+                    Divider()
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Перейти к закреплённому сообщению")
+        }
+    }
 
     private var chatToolbarTitle: some View {
         Group {
@@ -1790,6 +1835,61 @@ private struct MessageBubble: View {
                         }
                     }
                     messageContent
+                    .contextMenu {
+                        if message.systemEventText == nil {
+                        if !message.text.isEmpty && !message.isDeleted {
+                            Button {
+                                UIPasteboard.general.string = message.text
+                            } label: {
+                                Label("Копировать", systemImage: "doc.on.doc")
+                            }
+                        }
+                        if !message.isDeleted, message.id > 0 {
+                            Button {
+                                onReply(message)
+                            } label: {
+                                Label("Ответить", systemImage: "arrowshape.turn.up.left")
+                            }
+                        }
+                        if message.isOutgoing, !message.isDeleted, message.id > 0, !message.text.isEmpty {
+                            Button {
+                                onEdit(message)
+                            } label: {
+                                Label("Редактировать", systemImage: "pencil")
+                            }
+                        }
+                        if !message.isDeleted, message.id > 0 {
+                            Button {
+                                onTogglePin(message)
+                            } label: {
+                                Label(
+                                    message.isPinned ? "Открепить" : "Закрепить",
+                                    systemImage: message.isPinned ? "pin.slash" : "pin"
+                                )
+                            }
+                            Button {
+                                onToggleImportant(message)
+                            } label: {
+                                Label(
+                                    message.isImportant ? "Убрать из важных" : "Пометить важным",
+                                    systemImage: message.isImportant ? "star.slash" : "star"
+                                )
+                            }
+                            Button(role: .destructive) {
+                                onDelete(message)
+                            } label: {
+                                Label("Удалить", systemImage: "trash")
+                                    .foregroundStyle(.red)
+                            }
+                        } else if message.isDeleted, message.id > 0 {
+                            Button {
+                                onRestore(message)
+                            } label: {
+                                Label("Восстановить", systemImage: "arrow.uturn.backward")
+                            }
+                        }
+                        }
+                    }
                     if !message.isOutgoing { Spacer(minLength: 48) }
                 }
             }
@@ -1798,61 +1898,6 @@ private struct MessageBubble: View {
         .contentShape(Rectangle())
         .offset(x: swipeOffset)
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: swipeOffset)
-        .contextMenu {
-            if message.systemEventText == nil {
-            if !message.text.isEmpty && !message.isDeleted {
-                Button {
-                    UIPasteboard.general.string = message.text
-                } label: {
-                    Label("Копировать", systemImage: "doc.on.doc")
-                }
-            }
-            if !message.isDeleted, message.id > 0 {
-                Button {
-                    onReply(message)
-                } label: {
-                    Label("Ответить", systemImage: "arrowshape.turn.up.left")
-                }
-            }
-            if message.isOutgoing, !message.isDeleted, message.id > 0, !message.text.isEmpty {
-                Button {
-                    onEdit(message)
-                } label: {
-                    Label("Редактировать", systemImage: "pencil")
-                }
-            }
-            if !message.isDeleted, message.id > 0 {
-                Button {
-                    onTogglePin(message)
-                } label: {
-                    Label(
-                        message.isPinned ? "Открепить" : "Закрепить",
-                        systemImage: message.isPinned ? "pin.slash" : "pin"
-                    )
-                }
-                Button {
-                    onToggleImportant(message)
-                } label: {
-                    Label(
-                        message.isImportant ? "Убрать из важных" : "Пометить важным",
-                        systemImage: message.isImportant ? "star.slash" : "star"
-                    )
-                }
-                Button(role: .destructive) {
-                    onDelete(message)
-                } label: {
-                    Label("Удалить", systemImage: "trash")
-                        .foregroundStyle(.red)
-                }
-            } else if message.isDeleted, message.id > 0 {
-                Button {
-                    onRestore(message)
-                } label: {
-                    Label("Восстановить", systemImage: "arrow.uturn.backward")
-                }
-            }
-            }
-        }
         .highPriorityGesture(
             DragGesture(minimumDistance: 24)
                 .onChanged { value in
