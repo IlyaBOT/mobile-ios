@@ -101,6 +101,9 @@ struct MessagesView: View {
         .refreshable {
             viewModel.load()
         }
+        .onReceive(NotificationCenter.default.publisher(for: ChatArchiveStore.didChange)) { _ in
+            viewModel.refreshArchive()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openvkLongPollDidReceiveEvent)) { notification in
             let type = notification.userInfo?["type"] as? Int ?? -1
             if type == 4 {
@@ -128,6 +131,38 @@ struct MessagesView: View {
         }
     }
 
+    private var archivedChats: some View {
+        List {
+            ForEach(viewModel.archivedConversations) { conversation in
+                NavigationLink {
+                    ChatView(
+                        conversation: conversation,
+                        selectedMedia: $selectedMedia,
+                        owningPost: $owningPost
+                    )
+                } label: {
+                    ConversationRow(conversation: conversation, typingText: viewModel.typingText(for: conversation))
+                }
+                .contextMenu {
+                    Button {
+                        viewModel.archive(conversation, archived: false)
+                    } label: {
+                        Label("Вернуть из архива", systemImage: "tray.and.arrow.up")
+                    }
+                    if conversation.unreadCount > 0 {
+                        Button {
+                            viewModel.markConversationAsRead(conversation)
+                        } label: {
+                            Label("Пометить как прочитанное", systemImage: "envelope.open")
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Архив")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
     @ViewBuilder
     private var content: some View {
         if viewModel.isSearching && !viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && viewModel.searchResults.isEmpty {
@@ -136,7 +171,7 @@ struct MessagesView: View {
         } else if viewModel.isLoading && viewModel.conversations.isEmpty {
             ProgressView("Загрузка чатов…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if viewModel.displayedConversations.isEmpty {
+        } else if viewModel.displayedConversations.isEmpty && viewModel.archivedConversations.isEmpty {
             VStack(spacing: 12) {
                 Image(systemName: viewModel.searchQuery.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
                     .font(.system(size: 42))
@@ -151,6 +186,15 @@ struct MessagesView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List {
+                if !viewModel.archivedConversations.isEmpty
+                    && viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    NavigationLink {
+                        archivedChats
+                    } label: {
+                        Label("Архив", systemImage: "archivebox")
+                    }
+                }
+
                 ForEach(viewModel.displayedConversations) { conversation in
                     NavigationLink {
                         ChatView(
@@ -165,6 +209,12 @@ struct MessagesView: View {
                         )
                     }
                     .contextMenu {
+                        Button {
+                            viewModel.archive(conversation, archived: true)
+                        } label: {
+                            Label("В архив", systemImage: "archivebox")
+                        }
+
                         if conversation.unreadCount > 0 {
                             Button {
                                 viewModel.markConversationAsRead(conversation)
