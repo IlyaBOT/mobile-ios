@@ -1814,6 +1814,7 @@ private struct MessageBubble: View {
     let onRestore: (ChatMessage) -> Void
     let onDelete: (ChatMessage) -> Void
     @State private var swipeOffset: CGFloat = 0
+    @State private var fetchedPostViews: Int?
 
     var body: some View {
         Group {
@@ -1894,7 +1895,9 @@ private struct MessageBubble: View {
                 }
             }
         }
-        .padding(.top, joinsPrevious ? 0 : 4)
+        // Rich post cards must be separated from preceding messages even
+        // when they are consecutive messages from the same sender.
+        .padding(.top, singleWallAttachment != nil ? 7 : (joinsPrevious ? 0 : 4))
         // Do not force the entire row to be a context-menu preview shape.
         // In particular this generated an oversized translucent rectangle
         // around otherwise transparent stickers on long-press.
@@ -2011,17 +2014,40 @@ private struct MessageBubble: View {
             .frame(width: photoBubbleWidth, alignment: .leading)
             .padding(.top, 10)
 
-            HStack {
+            HStack(alignment: .center, spacing: 8) {
+                if let count = wall.viewCount ?? fetchedPostViews {
+                    Label(count.formatted(), systemImage: "eye")
+                        .font(.caption2)
+                        .foregroundStyle(message.isOutgoing ? Color.white.opacity(0.75) : Color.secondary)
+                }
                 Spacer(minLength: 0)
                 messageMetadata
             }
             .padding(.horizontal, 13)
-            .padding(.vertical, 9)
+            .padding(.top, 8)
+            .padding(.bottom, 9)
         }
         .foregroundStyle(message.isOutgoing ? .white : .primary)
         .frame(width: photoBubbleWidth, alignment: .leading)
         .background(attachmentBubbleColor)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .task(id: wall.url) {
+            fetchedPostViews = nil
+            guard wall.viewCount == nil, let reference = wall.postReference else { return }
+            do {
+                let details: ChatWallLookupResponse = try await APIClient.shared.call(
+                    method: "wall.getById",
+                    parameters: [
+                        "posts": "\(reference.ownerID)_\(reference.postID)",
+                        "extended": "1"
+                    ],
+                    as: ChatWallLookupResponse.self
+                )
+                fetchedPostViews = details.items.first?.views?.count
+            } catch {
+                // Instances that omit the counter simply show the message time.
+            }
+        }
     }
 
     private var richAttachmentBubble: some View {
@@ -2479,7 +2505,6 @@ private struct ChatRichAttachmentCard: View {
     let onVideoTap: (ChatVideo) -> Void
     let onWallTap: (ChatWallPost) -> Void
     @ObservedObject private var audioPlayer = AudioPlayerService.shared
-    @State private var remotePostViews: Int?
 
     @ViewBuilder
     var body: some View {
@@ -2662,7 +2687,7 @@ private struct ChatRichAttachmentCard: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
-            .padding(.bottom, 10)
+            .padding(.bottom, 4)
 
             if !wall.text.isEmpty {
                 Text(wall.text)
@@ -2745,39 +2770,13 @@ private struct ChatRichAttachmentCard: View {
                 .padding(.top, 8)
             }
 
-            if let views = wall.viewCount ?? remotePostViews {
-                Label(views.formatted(), systemImage: "eye")
-                    .font(.caption2)
-                    .foregroundStyle(secondaryColor)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
-            }
         }
         .foregroundStyle(primaryColor)
         .padding(.bottom, 10)
         .frame(width: max(1, mediaWidth), alignment: .leading)
         // No nested card background: inherit the containing message bubble's
         // blue (outgoing) or gray (incoming) fill and rounded corners.
-        .task(id: wall.url) {
-            remotePostViews = nil
-            guard wall.viewCount == nil, let reference = wall.postReference else { return }
-            do {
-                // The wall attachment payload has no view counter. The full
-                // wall.getById response exposes views.count when available.
-                let details: ChatWallLookupResponse = try await APIClient.shared.call(
-                    method: "wall.getById",
-                    parameters: [
-                        "posts": "\(reference.ownerID)_\(reference.postID)",
-                        "extended": "1"
-                    ],
-                    as: ChatWallLookupResponse.self
-                )
-                remotePostViews = details.items.first?.views?.count
-            } catch {
-                // Some instances do not expose views; never display a fake 0.
-            }
-        }
-    }
+
 }
 
 private struct ChatForwardedMessageCard: View {
