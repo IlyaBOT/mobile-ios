@@ -93,6 +93,8 @@ protocol ChatInfoServiceProtocol {
     func getMuted(peerID: Int) async throws -> Bool
     func setMuted(peerID: Int, muted: Bool) async throws
     func editTitle(peerID: Int, title: String) async throws
+    func updateChatPhoto(peerID: Int, imageData: Data) async throws
+    func deleteChatPhoto(peerID: Int) async throws
     func getInviteLink(peerID: Int, reset: Bool) async throws -> URL
 }
 
@@ -254,6 +256,44 @@ struct ChatInfoService: ChatInfoServiceProtocol {
         )
     }
 
+    func updateChatPhoto(peerID: Int, imageData: Data) async throws {
+        guard peerID > 2_000_000_000 else { throw APIError.invalidResponse }
+        let chatID = peerID - 2_000_000_000
+        let uploadServer: ChatUploadServer = try await client.call(
+            method: "photos.getChatUploadServer",
+            parameters: ["chat_id": String(chatID)],
+            httpMethod: "GET",
+            as: ChatUploadServer.self
+        )
+        let data = try await client.upload(
+            urlString: uploadServer.uploadUrl,
+            fileData: imageData,
+            fileName: "chat_avatar.jpg",
+            mimeType: "image/jpeg"
+        )
+        let upload = try JSONDecoder().decode(ChatSettingsImageUpload.self, from: data)
+        let _: ChatSettingsImageResult = try await client.call(
+            method: "messages.setChatPhoto",
+            parameters: [
+                "chat_id": String(chatID),
+                "file": upload.photo,
+                "hash": upload.hash
+            ],
+            httpMethod: "POST",
+            as: ChatSettingsImageResult.self
+        )
+    }
+
+    func deleteChatPhoto(peerID: Int) async throws {
+        guard peerID > 2_000_000_000 else { throw APIError.invalidResponse }
+        let _: ChatSettingsImageResult = try await client.call(
+            method: "messages.deleteChatPhoto",
+            parameters: ["chat_id": String(peerID - 2_000_000_000)],
+            httpMethod: "POST",
+            as: ChatSettingsImageResult.self
+        )
+    }
+
     func getInviteLink(peerID: Int, reset: Bool = false) async throws -> URL {
         let response = try await client.call(
             method: "messages.getInviteLink",
@@ -367,4 +407,13 @@ private struct ChatPushSettings: Decodable {
 
 private struct ChatInviteLinkResponse: Decodable {
     let link: String
+}
+
+private struct ChatSettingsImageUpload: Decodable {
+    let photo: String
+    let hash: String
+}
+
+private struct ChatSettingsImageResult: Decodable {
+    let messageId: Int?
 }
