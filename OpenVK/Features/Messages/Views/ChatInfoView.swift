@@ -73,43 +73,46 @@ struct ChatInfoView: View {
             ChatMaterialPreviewView(item: item)
         }
         .confirmationDialog(
-            "Очистить переписку?",
-            isPresented: $confirmsClearHistory,
-            titleVisibility: .visible
-        ) {
-            Button("Очистить историю", role: .destructive) {
-                model.clearHistory()
-            }
-            Button("Отмена", role: .cancel) {}
-        } message: {
-            Text("История сообщений будет удалена из вашего списка диалогов.")
-        }
-        .confirmationDialog(
-            "Покинуть беседу?",
-            isPresented: $confirmsLeaveChat,
-            titleVisibility: .visible
-        ) {
-            Button("Выйти из беседы", role: .destructive) {
-                model.leaveConversation()
-            }
-            Button("Отмена", role: .cancel) {}
-        } message: {
-            Text("Вы больше не будете участником этой беседы.")
-        }
-        .confirmationDialog(
-            "Исключить участника из беседы?",
+            "Подтвердить действие",
             isPresented: Binding(
-                get: { memberToExclude != nil },
-                set: { if !$0 { memberToExclude = nil } }
-            )
+                get: { confirmsClearHistory || confirmsLeaveChat || memberToExclude != nil },
+                set: { if !$0 {
+                    confirmsClearHistory = false
+                    confirmsLeaveChat = false
+                    memberToExclude = nil
+                } }
+            ),
+            titleVisibility: .visible
         ) {
-            if let memberToExclude {
+            if confirmsClearHistory {
+                Button("Очистить историю", role: .destructive) {
+                    confirmsClearHistory = false
+                    model.clearHistory()
+                }
+            } else if confirmsLeaveChat {
+                Button("Выйти из беседы", role: .destructive) {
+                    confirmsLeaveChat = false
+                    model.leaveConversation()
+                }
+            } else if let memberToExclude {
                 Button("Исключить \(memberToExclude.user.displayName)", role: .destructive) {
                     model.exclude(memberToExclude)
                     self.memberToExclude = nil
                 }
             }
-            Button("Отмена", role: .cancel) { memberToExclude = nil }
+            Button("Отмена", role: .cancel) {
+                confirmsClearHistory = false
+                confirmsLeaveChat = false
+                memberToExclude = nil
+            }
+        } message: {
+            if confirmsClearHistory {
+                Text("История будет удалена из вашего списка диалогов.")
+            } else if confirmsLeaveChat {
+                Text("Вы больше не будете участником беседы.")
+            } else {
+                Text("Участник потеряет доступ к беседе.")
+            }
         }
         .alert(item: $activeAlert) { alert in
             switch alert {
