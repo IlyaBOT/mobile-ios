@@ -461,98 +461,9 @@ private struct ChatSettingsEditorView: View {
     var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("Беседа")) {
-                    if model.canEditTitle {
-                        if #available(iOS 16.0, *) {
-                            ChatAvatarPickerView(model: model)
-                        }
-
-                        if model.photoURL != nil {
-                            Button(role: .destructive) {
-                                confirmsAvatarDelete = true
-                            } label: {
-                                Label("Удалить фотографию", systemImage: "trash")
-                            }
-                        }
-                    }
-
-                    TextField("Название", text: $title)
-                        .disabled(!model.canEditTitle)
-
-                    Text("Описание беседы пока нельзя изменять через API OpenVK.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if model.canAddMembers || !model.members.isEmpty {
-                    Section(header: Text("Участники")) {
-                        if model.canAddMembers {
-                            Button {
-                                showsAddMembers = true
-                            } label: {
-                                Label("Добавить участника", systemImage: "person.badge.plus")
-                            }
-                        }
-                        ForEach(model.members) { member in
-                            HStack(spacing: 10) {
-                                Avatar(user: member.user, size: 34)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(member.user.displayName)
-                                        .font(.subheadline)
-                                    if let role = member.roleTitle {
-                                        Text(role)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                Spacer(minLength: 0)
-                                if model.canAssign(member) || model.canExclude(member) {
-                                    Menu {
-                                        if model.canAssign(member) {
-                                            Button {
-                                                model.setModerator(member, enabled: !member.isModerator)
-                                            } label: {
-                                                Label(
-                                                    member.isModerator ? "Снять администратора" : "Назначить администратором",
-                                                    systemImage: member.isModerator ? "person.crop.circle.badge.minus" : "star"
-                                                )
-                                            }
-                                        }
-                                        if model.canExclude(member) {
-                                            Button(role: .destructive) {
-                                                memberToExclude = member
-                                            } label: {
-                                                Label("Исключить из беседы", systemImage: "person.crop.circle.badge.xmark")
-                                            }
-                                        }
-                                    } label: {
-                                        Image(systemName: "ellipsis.circle")
-                                            .foregroundStyle(Color.appAccent)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if model.canSeeInviteLink || model.canRegenerateInviteLink {
-                    Section(header: Text("Ссылка-приглашение")) {
-                        if model.canSeeInviteLink {
-                            Button {
-                                model.copyInviteLink()
-                            } label: {
-                                Label("Скопировать ссылку", systemImage: "doc.on.doc")
-                            }
-                        }
-                        if model.canRegenerateInviteLink {
-                            Button(role: .destructive) {
-                                confirmsInviteReset = true
-                            } label: {
-                                Label("Создать новую ссылку", systemImage: "arrow.clockwise")
-                            }
-                        }
-                    }
-                }
+                chatDetailsSection
+                participantsSection
+                inviteSection
             }
             .navigationTitle("Изменить беседу")
             .navigationBarTitleDisplayMode(.inline)
@@ -625,6 +536,107 @@ private struct ChatSettingsEditorView: View {
         }
         .navigationViewStyle(.stack)
     }
+    private var chatDetailsSection: some View {
+        Section(header: Text("Беседа")) {
+            if model.canEditTitle {
+                if #available(iOS 16.0, *) {
+                    ChatAvatarPickerView(model: model)
+                }
+        
+                if model.photoURL != nil {
+                    Button(role: .destructive) {
+                        confirmsAvatarDelete = true
+                    } label: {
+                        Label("Удалить фотографию", systemImage: "trash")
+                    }
+                }
+            }
+        
+            TextField("Название", text: $title)
+                .disabled(!model.canEditTitle)
+        
+            Text("Описание беседы пока нельзя изменять через API OpenVK.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var participantsSection: some View {
+        if model.canAddMembers || !model.members.isEmpty {
+            Section(header: Text("Участники")) {
+                if model.canAddMembers {
+                    Button {
+                        showsAddMembers = true
+                    } label: {
+                        Label("Добавить участника", systemImage: "person.badge.plus")
+                    }
+                }
+                ForEach(model.members) { member in
+                    HStack(spacing: 10) {
+                        Avatar(user: member.user, size: 34)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(member.user.displayName)
+                                .font(.subheadline)
+                            if let role = member.roleTitle {
+                                Text(role)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        if model.canAssign(member) || model.canExclude(member) {
+                            Menu {
+                                if model.canAssign(member) {
+                                    Button {
+                                        model.setModerator(member, enabled: !member.isModerator)
+                                    } label: {
+                                        Label(
+                                            member.isModerator ? "Снять администратора" : "Назначить администратором",
+                                            systemImage: member.isModerator ? "person.crop.circle.badge.minus" : "star"
+                                        )
+                                    }
+                                }
+                                if model.canExclude(member) {
+                                    Button(role: .destructive) {
+                                        memberToExclude = member
+                                    } label: {
+                                        Label("Исключить из беседы", systemImage: "person.crop.circle.badge.xmark")
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                                    .foregroundStyle(Color.appAccent)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var inviteSection: some View {
+        if model.canSeeInviteLink || model.canRegenerateInviteLink {
+            Section(header: Text("Ссылка-приглашение")) {
+                if model.canSeeInviteLink {
+                    Button {
+                        model.copyInviteLink()
+                    } label: {
+                        Label("Скопировать ссылку", systemImage: "doc.on.doc")
+                    }
+                }
+                if model.canRegenerateInviteLink {
+                    Button(role: .destructive) {
+                        confirmsInviteReset = true
+                    } label: {
+                        Label("Создать новую ссылку", systemImage: "arrow.clockwise")
+                    }
+                }
+            }
+        }
+    }
+
 }
 
 @available(iOS 16.0, *)
