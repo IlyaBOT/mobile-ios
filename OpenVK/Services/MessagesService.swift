@@ -7,6 +7,7 @@ import Foundation
 
 protocol MessagesServiceProtocol {
     func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
+    func fetchConversationsByIDs(_ peerIDs: [Int], completion: @escaping (Result<ConversationsPage, Error>) -> Void)
     func searchConversations(query: String, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
     func cachedHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool) -> MessagesPage?
     func cacheHistory(page: MessagesPage, peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool)
@@ -358,6 +359,41 @@ final class MessagesService: MessagesServiceProtocol {
             as: Int.self
         ) { result in
             completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func fetchConversationsByIDs(
+        _ peerIDs: [Int],
+        completion: @escaping (Result<ConversationsPage, Error>) -> Void
+    ) {
+        guard !peerIDs.isEmpty else {
+            completion(.success(ConversationsPage(totalCount: 0, conversations: [])))
+            return
+        }
+        client.call(
+            method: "messages.getConversationsById",
+            parameters: [
+                "peer_ids": peerIDs.map(String.init).joined(separator: ","),
+                "extended": "1",
+                "fields": "id,first_name,last_name,screen_name,photo_100,photo_200,online,last_seen,verified"
+            ],
+            httpMethod: "GET",
+            as: VKConversationsResponse.self
+        ) { result in
+            switch result {
+            case .success(let response):
+                let profiles = response.profiles ?? []
+                let groups = response.groups ?? []
+                let conversations = (response.items ?? []).map {
+                    self.makeConversation(from: $0, profiles: profiles, groups: groups)
+                }
+                completion(.success(ConversationsPage(
+                    totalCount: response.count ?? conversations.count,
+                    conversations: conversations
+                )))
+            case .failure(let error):
+                completion(.failure(error))
+            }
         }
     }
 
