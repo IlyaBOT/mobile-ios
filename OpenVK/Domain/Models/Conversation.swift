@@ -91,6 +91,7 @@ struct VKChatSettings: Decodable {
     let photo100: String?
     let state: String?
     let membersCount: Int?
+    let pinnedMessage: VKHistoryMessage?
 }
 
 struct VKConversationCanWrite: Decodable {
