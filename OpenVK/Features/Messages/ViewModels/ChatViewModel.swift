@@ -492,6 +492,11 @@ final class ChatViewModel: ObservableObject {
                 guard let self, let type = note.userInfo?["type"] as? Int else { return }
                 if type == 2 || type == 3 {
                     self.handleMessageFlagEvent(note, setting: type == 2)
+                    if let event = note.userInfo?["event"] as? [Any],
+                       event.count > 2, let mask = event[2] as? Int,
+                       (mask & 256) != 0 {
+                        self.refreshPinnedMessage()
+                    }
                     if type == 3 {
                         self.handleReadFlagEvent(note)
                     }
