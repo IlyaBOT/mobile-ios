@@ -449,7 +449,6 @@ private struct ChatSettingsEditorView: View {
     @State private var confirmsAvatarDelete = false
     @State private var showsAddMembers = false
     @State private var memberToExclude: ChatMember?
-    @State private var selectedAvatar: PhotosPickerItem?
 
     init(model: ChatInfoViewModel) {
         self.model = model
@@ -461,26 +460,9 @@ private struct ChatSettingsEditorView: View {
             Form {
                 Section(header: Text("Беседа")) {
                     if model.canEditTitle {
-                        PhotosPicker(selection: $selectedAvatar, matching: .images) {
-                            VStack(spacing: 8) {
-                                Avatar(
-                                    user: User(
-                                        uid: model.conversation.id,
-                                        username: "",
-                                        displayName: model.title,
-                                        avatarURL: model.photoURL
-                                    ),
-                                    size: 82,
-                                    placeholderImageName: "chat_default_100",
-                                    isChat: true
-                                )
-                                Label("Изменить фотографию", systemImage: "camera")
-                                    .font(.footnote)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                        if #available(iOS 16.0, *) {
+                            ChatAvatarPickerView(model: model)
                         }
-                        .disabled(model.isWorking)
 
                         if model.photoURL != nil {
                             Button(role: .destructive) {
@@ -592,15 +574,6 @@ private struct ChatSettingsEditorView: View {
                     )
                 }
             }
-            .onChange(of: selectedAvatar) { item in
-                guard let item else { return }
-                Task {
-                    guard let data = try? await item.loadTransferable(type: Data.self),
-                          let image = UIImage(data: data),
-                          let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
-                    model.updateAvatar(jpeg)
-                }
-            }
             .sheet(isPresented: $showsAddMembers) {
                 ChatAddParticipantsView(model: model)
             }
@@ -642,6 +615,44 @@ private struct ChatSettingsEditorView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+}
+
+@available(iOS 16.0, *)
+private struct ChatAvatarPickerView: View {
+    @ObservedObject var model: ChatInfoViewModel
+    @State private var selectedAvatar: PhotosPickerItem?
+
+    var body: some View {
+        PhotosPicker(selection: $selectedAvatar, matching: .images) {
+            VStack(spacing: 8) {
+                Avatar(
+                    user: User(
+                        uid: model.conversation.id,
+                        username: "",
+                        displayName: model.title,
+                        avatarURL: model.photoURL
+                    ),
+                    size: 82,
+                    placeholderImageName: "chat_default_100",
+                    isChat: true
+                )
+                Label("Изменить фотографию", systemImage: "camera")
+                    .font(.footnote)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+        }
+        .disabled(model.isWorking)
+        .onChange(of: selectedAvatar) { item in
+            guard let item else { return }
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self),
+                      let image = UIImage(data: data),
+                      let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
+                model.updateAvatar(jpeg)
+            }
+        }
     }
 }
 
