@@ -14,6 +14,7 @@ private struct SavedChatPosition: Codable {
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published private(set) var messages: [ChatMessage] = []
+    @Published private(set) var pinnedMessage: ChatMessage?
     @Published private(set) var isLoading = false
     private(set) var isLoadingOlder = false
     private(set) var isLoadingNewer = false
@@ -80,6 +81,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func load() {
+        if conversation.isChat { refreshPinnedMessage() }
         guard !isLoading, !isLoadingOlder else { return }
         // A restored page is anchored to a message. Refreshing from offset 0 here
         // would join two non-adjacent ranges and break subsequent pagination.
@@ -307,6 +309,22 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func refreshPinnedMessage() {
+        guard conversation.isChat else { return }
+        service.fetchPinnedMessage(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let pinned):
+                    self.pinnedMessage = pinned
+                case .failure:
+                    // Keep the previously displayed pin on transient failures.
+                    break
+                }
+            }
+        }
+    }
+
     func togglePin(message: ChatMessage) {
         guard message.id > 0, !message.isDeleted else { return }
         if message.isPinned {
@@ -317,6 +335,7 @@ final class ChatViewModel: ObservableObject {
                     for index in self.messages.indices {
                         self.messages[index].isPinned = false
                     }
+                    self.pinnedMessage = nil
                 case .failure(let error):
                     self.errorMessage = error.localizedDescription
                 }
@@ -329,6 +348,9 @@ final class ChatViewModel: ObservableObject {
                     for index in self.messages.indices {
                         self.messages[index].isPinned = self.messages[index].id == message.id
                     }
+                    var pinned = message
+                    pinned.isPinned = true
+                    self.pinnedMessage = pinned
                 case .failure(let error):
                     self.errorMessage = error.localizedDescription
                 }
@@ -483,6 +505,7 @@ final class ChatViewModel: ObservableObject {
                     self.updatePeerPresence(note, isOnline: type == 8)
                 } else if type == 4 || type == 5 || type == 14 || type == 51 || type == 52 {
                     if let peerID = note.userInfo?["peerID"] as? Int, peerID != self.conversation.id { return }
+                    self.refreshPinnedMessage()
                     self.load()
                 } else if (61...64).contains(type) {
                     self.updateTyping(note)
