@@ -1895,7 +1895,9 @@ private struct MessageBubble: View {
             }
         }
         .padding(.top, joinsPrevious ? 0 : 4)
-        .contentShape(Rectangle())
+        // Do not force the entire row to be a context-menu preview shape.
+        // In particular this generated an oversized translucent rectangle
+        // around otherwise transparent stickers on long-press.
         .offset(x: swipeOffset)
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: swipeOffset)
         .highPriorityGesture(
