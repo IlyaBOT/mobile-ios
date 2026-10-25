@@ -451,6 +451,7 @@ private struct ChatSettingsEditorView: View {
     @State private var confirmsInviteReset = false
     @State private var confirmsAvatarDelete = false
     @State private var showsAddMembers = false
+    @State private var showsPermissionsEditor = false
     @State private var memberToExclude: ChatMember?
 
     init(model: ChatInfoViewModel) {
@@ -490,6 +491,9 @@ private struct ChatSettingsEditorView: View {
             }
             .sheet(isPresented: $showsAddMembers) {
                 ChatAddParticipantsView(model: model)
+            }
+            .sheet(isPresented: $showsPermissionsEditor) {
+                ChatPermissionsEditorView(model: model)
             }
             .confirmationDialog(
                 "Подтвердить изменение",
@@ -555,9 +559,13 @@ private struct ChatSettingsEditorView: View {
             TextField("Название", text: $title)
                 .disabled(!model.canEditTitle)
         
-            Text("Описание беседы пока нельзя изменять через API OpenVK.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if model.canEditPermissions {
+                Button {
+                    showsPermissionsEditor = true
+                } label: {
+                    Label("Права участников", systemImage: "slider.horizontal.3")
+                }
+            }
         }
     }
 
@@ -637,6 +645,66 @@ private struct ChatSettingsEditorView: View {
         }
     }
 
+}
+
+private struct ChatPermissionsEditorView: View {
+    @Environment(\.presentationMode) private var presentationMode
+    @ObservedObject var model: ChatInfoViewModel
+    @State private var draft: ChatPermissionSettings
+
+    init(model: ChatInfoViewModel) {
+        self.model = model
+        _draft = State(initialValue: model.permissions)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    permissionRow("Приглашать участников", selection: $draft.invite)
+                    permissionRow("Менять название и аватар", selection: $draft.changeInfo)
+                    permissionRow("Закреплять сообщения", selection: $draft.changePin)
+                    permissionRow("Использовать @all и @online", selection: $draft.useMassMentions)
+                    permissionRow("Просматривать ссылку-приглашение", selection: $draft.seeInviteLink)
+                    permissionRow("Обновлять ссылку-приглашение", selection: $draft.changeInviteLink)
+                    permissionRow("Назначать администраторов", selection: $draft.changeAdmins,
+                                  levels: [.admin, .owner])
+                    permissionRow("Начинать звонки", selection: $draft.call)
+                } footer: {
+                    Text("Права применяются ко всем участникам беседы. Владелец всегда сохраняет полный доступ.")
+                }
+            }
+            .navigationTitle("Права в беседе")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Отмена") { presentationMode.wrappedValue.dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Сохранить") {
+                        model.updatePermissions(draft) { success in
+                            if success { presentationMode.wrappedValue.dismiss() }
+                        }
+                    }
+                    .disabled(!model.canEditPermissions || model.isWorking || draft == model.permissions)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func permissionRow(
+        _ title: String,
+        selection: Binding<ChatPermissionLevel>,
+        levels: [ChatPermissionLevel] = ChatPermissionLevel.allCases
+    ) -> some View {
+        Picker(title, selection: selection) {
+            ForEach(levels) { level in
+                Text(level.title).tag(level)
+            }
+        }
+        .pickerStyle(.menu)
+    }
 }
 
 @available(iOS 16.0, *)
