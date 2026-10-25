@@ -21,6 +21,8 @@ final class ChatInfoViewModel: ObservableObject {
     @Published private(set) var memberCount: Int
     @Published private(set) var title: String
     @Published private(set) var photoURL: URL?
+    @Published private(set) var permissions = ChatPermissionSettings()
+    @Published private(set) var canEditPermissions = false
     @Published private(set) var isLoadingMembers = false
     @Published private(set) var isMuted = false
     @Published private(set) var isWorking = false
@@ -50,7 +52,7 @@ final class ChatInfoViewModel: ObservableObject {
     }
 
     var canAddMembers: Bool { canInvite }
-    var canEdit: Bool { canChangeInfo || canChangePin || canChangeInviteLink || canInvite || canPromote || canModerate }
+    var canEdit: Bool { canChangeInfo || canEditPermissions || canChangePin || canChangeInviteLink || canInvite || canPromote || canModerate }
     var canEditTitle: Bool { canChangeInfo }
     var canRegenerateInviteLink: Bool { canChangeInviteLink }
     var memberIDs: Set<Int> { Set(members.map(\.id)) }
@@ -87,6 +89,8 @@ final class ChatInfoViewModel: ObservableObject {
                 canChangeInfo = page.canChangeInfo
                 canChangePin = page.canChangePin
                 canChangeInviteLink = page.canChangeInviteLink
+                permissions = page.permissions
+                canEditPermissions = page.canEditPermissions
                 isOwner = page.isOwner
             } catch {
                 errorMessage = error.localizedDescription
@@ -162,6 +166,27 @@ final class ChatInfoViewModel: ObservableObject {
                 try await service.editTitle(peerID: conversation.id, title: value)
                 title = value
                 isWorking = false
+                completion(true)
+            } catch {
+                isWorking = false
+                errorMessage = error.localizedDescription
+                completion(false)
+            }
+        }
+    }
+
+    func updatePermissions(_ updated: ChatPermissionSettings, completion: @escaping (Bool) -> Void) {
+        guard canEditPermissions, !isWorking else {
+            completion(false)
+            return
+        }
+        isWorking = true
+        Task {
+            do {
+                try await service.setPermissions(peerID: conversation.id, permissions: updated)
+                permissions = updated
+                isWorking = false
+                refreshMembers()
                 completion(true)
             } catch {
                 isWorking = false
