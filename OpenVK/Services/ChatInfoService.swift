@@ -52,6 +52,58 @@ struct ChatMember: Identifiable {
     }
 }
 
+enum ChatPermissionLevel: String, CaseIterable, Identifiable, Codable {
+    case all
+    case admin
+    case owner
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "Все участники"
+        case .admin: return "Администраторы и владелец"
+        case .owner: return "Только владелец"
+        }
+    }
+}
+
+struct ChatPermissionSettings: Encodable, Equatable {
+    var invite: ChatPermissionLevel = .all
+    var changeInfo: ChatPermissionLevel = .admin
+    var changePin: ChatPermissionLevel = .admin
+    var useMassMentions: ChatPermissionLevel = .all
+    var seeInviteLink: ChatPermissionLevel = .admin
+    var changeInviteLink: ChatPermissionLevel = .owner
+    var call: ChatPermissionLevel = .all
+    var changeAdmins: ChatPermissionLevel = .owner
+
+    private enum CodingKeys: String, CodingKey {
+        case invite
+        case changeInfo = "change_info"
+        case changePin = "change_pin"
+        case useMassMentions = "use_mass_mentions"
+        case seeInviteLink = "see_invite_link"
+        case changeInviteLink = "change_invite_link"
+        case call
+        case changeAdmins = "change_admins"
+    }
+
+    init() {}
+
+    init(response: ChatPermissionsResponse?) {
+        guard let response else { return }
+        invite = ChatPermissionLevel(rawValue: response.invite ?? "") ?? .all
+        changeInfo = ChatPermissionLevel(rawValue: response.changeInfo ?? "") ?? .admin
+        changePin = ChatPermissionLevel(rawValue: response.changePin ?? "") ?? .admin
+        useMassMentions = ChatPermissionLevel(rawValue: response.useMassMentions ?? "") ?? .all
+        seeInviteLink = ChatPermissionLevel(rawValue: response.seeInviteLink ?? "") ?? .admin
+        changeInviteLink = ChatPermissionLevel(rawValue: response.changeInviteLink ?? "") ?? .owner
+        call = ChatPermissionLevel(rawValue: response.call ?? "") ?? .all
+        changeAdmins = ChatPermissionLevel(rawValue: response.changeAdmins ?? "") ?? .owner
+    }
+}
+
 struct ChatMembersPage {
     let members: [ChatMember]
     let count: Int
@@ -66,6 +118,8 @@ struct ChatMembersPage {
     let canChangeInviteLink: Bool
     let isOwner: Bool
     let isModerator: Bool
+    let permissions: ChatPermissionSettings
+    let canEditPermissions: Bool
 }
 
 struct ChatMaterial: Identifiable {
@@ -89,6 +143,7 @@ protocol ChatInfoServiceProtocol {
     func getMaterials(peerID: Int, section: ChatMaterialSection, startFrom: String?) async throws -> ChatMaterialsPage
     func addUsers(peerID: Int, userIDs: [Int]) async throws
     func setRole(peerID: Int, userID: Int, moderator: Bool) async throws
+    func setPermissions(peerID: Int, permissions: ChatPermissionSettings) async throws
     func removeUser(peerID: Int, userID: Int) async throws
     func getMuted(peerID: Int) async throws -> Bool
     func setMuted(peerID: Int, muted: Bool) async throws
@@ -152,6 +207,7 @@ struct ChatInfoService: ChatInfoServiceProtocol {
         let isModerator = current?.isModerator == true
         let isMember = current != nil
         let acl = settings?.acl
+        let permissions = ChatPermissionSettings(response: settings?.permissions)
         return ChatMembersPage(
             members: members,
             count: max(response.count ?? members.count, members.count),
@@ -165,7 +221,9 @@ struct ChatInfoService: ChatInfoServiceProtocol {
             canChangePin: isMember && (acl?.canChangePin?.value ?? (isOwner || isModerator)),
             canChangeInviteLink: isMember && (acl?.canChangeInviteLink?.value ?? isOwner),
             isOwner: isOwner,
-            isModerator: isModerator
+            isModerator: isModerator,
+            permissions: permissions,
+            canEditPermissions: isMember && (isOwner || (isModerator && permissions.changeAdmins == .admin))
         )
     }
 
@@ -224,6 +282,20 @@ struct ChatInfoService: ChatInfoServiceProtocol {
         let _: Int = try await client.call(method: "messages.setMemberRole", parameters: [
             "peer_id": String(peerID), "user_id": String(userID), "role": moderator ? "admin" : "member"
         ], httpMethod: "POST", as: Int.self)
+    }
+
+    func setPermissions(peerID: Int, permissions: ChatPermissionSettings) async throws {
+        guard peerID > 2_000_000_000 else { throw APIError.invalidResponse }
+        let jsonData = try JSONEncoder().encode(permissions)
+        guard let json = String(data: jsonData, encoding: .utf8) else {
+            throw APIError.invalidResponse
+        }
+        let _: Int = try await client.call(
+            method: "messages.setChatPermissions",
+            parameters: ["peer_id": String(peerID), "permissions": json],
+            httpMethod: "POST",
+            as: Int.self
+        )
     }
 
     func removeUser(peerID: Int, userID: Int) async throws {
@@ -344,6 +416,18 @@ private struct ChatSettingsResponse: Decodable {
     let adminId: Int?
     let adminIds: [Int]?
     let acl: ChatACLResponse?
+    let permissions: ChatPermissionsResponse?
+}
+
+struct ChatPermissionsResponse: Decodable {
+    let invite: String?
+    let changeInfo: String?
+    let changePin: String?
+    let useMassMentions: String?
+    let seeInviteLink: String?
+    let changeInviteLink: String?
+    let call: String?
+    let changeAdmins: String?
 }
 
 private struct ChatACLResponse: Decodable {
