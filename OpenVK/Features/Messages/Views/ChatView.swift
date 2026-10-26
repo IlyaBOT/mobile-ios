@@ -276,12 +276,9 @@ struct ChatView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 9)
+                .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(.secondarySystemBackground))
-                .overlay(alignment: .bottom) {
-                    Divider()
-                }
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Перейти к закреплённому сообщению")

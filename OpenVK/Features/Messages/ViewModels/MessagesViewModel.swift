@@ -15,6 +15,21 @@ enum ChatArchiveStore {
         "openvk.archive.\(AppConfig.currentHost).\(AuthService.shared.currentUser?.uid ?? 0)"
     }
 
+    private static var firstArchiveTipKey: String {
+        "openvk.archive.tip.shown.\(AppConfig.currentHost).\(AuthService.shared.currentUser?.uid ?? 0)"
+    }
+
+    private static var pendingArchiveTipKey: String {
+        "openvk.archive.tip.pending.\(AppConfig.currentHost).\(AuthService.shared.currentUser?.uid ?? 0)"
+    }
+
+    static func takePendingFirstArchiveTip() -> Bool {
+        guard UserDefaults.standard.bool(forKey: pendingArchiveTipKey) else { return false }
+        UserDefaults.standard.set(false, forKey: pendingArchiveTipKey)
+        UserDefaults.standard.set(true, forKey: firstArchiveTipKey)
+        return true
+    }
+
     static func archivedPeerIDs() -> [Int] {
         UserDefaults.standard.array(forKey: key)?.compactMap { $0 as? Int } ?? []
     }
@@ -25,7 +40,14 @@ enum ChatArchiveStore {
 
     static func setArchived(_ archived: Bool, peerID: Int) {
         var ids = Set(archivedPeerIDs())
-        if archived { ids.insert(peerID) } else { ids.remove(peerID) }
+        if archived {
+            if !ids.contains(peerID) && !UserDefaults.standard.bool(forKey: firstArchiveTipKey) {
+                UserDefaults.standard.set(true, forKey: pendingArchiveTipKey)
+            }
+            ids.insert(peerID)
+        } else {
+            ids.remove(peerID)
+        }
         UserDefaults.standard.set(Array(ids), forKey: key)
         NotificationCenter.default.post(name: didChange, object: nil)
     }
@@ -41,6 +63,7 @@ final class MessagesViewModel: ObservableObject {
     @Published var searchQuery = ""
     @Published private(set) var archiveRevision = 0
     @Published private(set) var fetchedArchivedConversations: [Conversation] = []
+    @Published private(set) var isLoadingArchive = false
     @Published var errorMessage: String?
 
     private let service: MessagesServiceProtocol
@@ -51,6 +74,7 @@ final class MessagesViewModel: ObservableObject {
     private var typingExpirations: [Int: [Int: Date]] = [:]
     private var typingNames: [Int: [Int: String]] = [:]
     private var searchWorkItem: DispatchWorkItem?
+    private var archiveRequestID = 0
 
     var displayedConversations: [Conversation] {
         let all = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -82,17 +106,26 @@ final class MessagesViewModel: ObservableObject {
     }
 
     private func refreshArchivedConversations() {
+        archiveRequestID &+= 1
+        let requestID = archiveRequestID
         let ids = ChatArchiveStore.archivedPeerIDs()
         guard !ids.isEmpty else {
+            isLoadingArchive = false
             fetchedArchivedConversations = []
             return
         }
+        isLoadingArchive = true
         service.fetchConversationsByIDs(ids) { [weak self] result in
             DispatchQueue.main.async {
-                guard let self else { return }
-                guard case .success(let page) = result else { return }
-                self.fetchedArchivedConversations = page.conversations.filter {
-                    ChatArchiveStore.contains($0.id)
+                guard let self, self.archiveRequestID == requestID else { return }
+                self.isLoadingArchive = false
+                switch result {
+                case .success(let page):
+                    self.fetchedArchivedConversations = page.conversations.filter {
+                        ChatArchiveStore.contains($0.id)
+                    }
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
                 }
             }
         }

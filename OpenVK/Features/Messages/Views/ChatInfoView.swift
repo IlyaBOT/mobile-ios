@@ -11,11 +11,13 @@ struct ChatInfoView: View {
     @Environment(\.dismiss) private var dismiss
     private enum ActiveAlert: Identifiable {
         case unavailable
+        case archiveHelp
         case error(String)
 
         var id: String {
             switch self {
             case .unavailable: return "unavailable"
+            case .archiveHelp: return "archiveHelp"
             case .error(let message): return "error:\(message)"
             }
         }
@@ -122,6 +124,12 @@ struct ChatInfoView: View {
                     message: Text("Раздел находится в разработке и будет доступен в следующих версиях."),
                     dismissButton: .cancel(Text("ОК"))
                 )
+            case .archiveHelp:
+                return Alert(
+                    title: Text("Чат добавлен в архив"),
+                    message: Text("Чтобы открыть архив, перейдите в начало списка сообщений и потяните его вниз. Вернуться можно кнопкой «Назад» или свайпом от левого края экрана."),
+                    dismissButton: .default(Text("Понятно"))
+                )
             case .error(let message):
                 return Alert(
                     title: Text("Ошибка"),
@@ -178,6 +186,9 @@ struct ChatInfoView: View {
                     }
                     Button {
                         model.toggleArchive()
+                        if ChatArchiveStore.takePendingFirstArchiveTip() {
+                            activeAlert = .archiveHelp
+                        }
                     } label: {
                         Label(
                             ChatArchiveStore.contains(model.conversation.id)

@@ -8,6 +8,8 @@ import SwiftUI
 struct MessagesView: View {
     @StateObject private var viewModel = MessagesViewModel()
     @State private var showCreateChat = false
+    @State private var showsArchive = false
+    @State private var showsArchiveTip = false
     @State private var conversationToDelete: Conversation?
     @State private var conversationToLeave: Conversation?
     @Binding var selectedMedia: Attachment?
@@ -23,7 +25,7 @@ struct MessagesView: View {
 
     var body: some View {
         MessagesNavigationContainer {
-            content
+            archiveNavigableContent
                 .navigationTitle("Сообщения")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -45,6 +47,11 @@ struct MessagesView: View {
                 )
                 .sheet(isPresented: $showCreateChat) {
                     CreateChatView()
+                }
+                .alert("Чат добавлен в архив", isPresented: $showsArchiveTip) {
+                    Button("Понятно", role: .cancel) {}
+                } message: {
+                    Text("Чтобы открыть архив, перейдите в начало списка сообщений и потяните его вниз. Вернуться можно кнопкой «Назад» или свайпом от левого края экрана.")
                 }
                 .confirmationDialog(
                     "Выйти из беседы?",
@@ -97,9 +104,7 @@ struct MessagesView: View {
             if viewModel.conversations.isEmpty {
                 viewModel.load()
             }
-        }
-        .refreshable {
-            viewModel.load()
+            showFirstArchiveTipIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: ChatArchiveStore.didChange)) { _ in
             viewModel.refreshArchive()
@@ -159,8 +164,56 @@ struct MessagesView: View {
                 }
             }
         }
+        .listStyle(.plain)
+        .overlay {
+            if viewModel.isLoadingArchive && viewModel.archivedConversations.isEmpty {
+                ProgressView("Загрузка архива…")
+            } else if viewModel.archivedConversations.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "archivebox")
+                        .font(.system(size: 42))
+                        .foregroundColor(.secondary)
+                    Text("Архив пуст")
+                        .font(.system(size: 17, weight: .semibold))
+                    Text("Переместите сюда чаты через меню беседы.")
+                        .font(.system(size: 15))
+                        .foregroundColor(.secondary)
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+            }
+        }
+        .refreshable {
+            viewModel.refreshArchive()
+        }
+        .onAppear {
+            viewModel.refreshArchive()
+        }
         .navigationTitle("Архив")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private var archiveNavigableContent: some View {
+        if #available(iOS 16.0, *) {
+            content.navigationDestination(isPresented: $showsArchive) {
+                archivedChats
+            }
+        } else {
+            content.background(
+                NavigationLink(destination: archivedChats, isActive: $showsArchive) {
+                    EmptyView()
+                }
+                .hidden()
+            )
+        }
+    }
+
+    private func showFirstArchiveTipIfNeeded() {
+        if ChatArchiveStore.takePendingFirstArchiveTip() {
+            showsArchiveTip = true
+        }
     }
 
     @ViewBuilder
@@ -171,30 +224,8 @@ struct MessagesView: View {
         } else if viewModel.isLoading && viewModel.conversations.isEmpty {
             ProgressView("Загрузка чатов…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if viewModel.displayedConversations.isEmpty && !viewModel.hasArchivedConversations {
-            VStack(spacing: 12) {
-                Image(systemName: viewModel.searchQuery.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
-                    .font(.system(size: 42))
-                    .foregroundColor(.secondary)
-                Text(viewModel.searchQuery.isEmpty ? "Нет чатов" : "Ничего не найдено")
-                    .font(.system(size: 17, weight: .semibold))
-                Text(viewModel.searchQuery.isEmpty ? "Здесь появятся ваши личные сообщения" : "Попробуйте изменить запрос")
-                    .font(.system(size: 15))
-                    .foregroundColor(.secondary)
-            }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List {
-                if viewModel.hasArchivedConversations
-                    && viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    NavigationLink {
-                        archivedChats
-                    } label: {
-                        Label("Архив", systemImage: "archivebox")
-                    }
-                }
-
                 ForEach(viewModel.displayedConversations) { conversation in
                     NavigationLink {
                         ChatView(
@@ -211,6 +242,7 @@ struct MessagesView: View {
                     .contextMenu {
                         Button {
                             viewModel.archive(conversation, archived: true)
+                            showFirstArchiveTipIfNeeded()
                         } label: {
                             Label("В архив", systemImage: "archivebox")
                         }
@@ -289,6 +321,30 @@ struct MessagesView: View {
                 }
             }
             .listStyle(.plain)
+            .overlay {
+                if viewModel.displayedConversations.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: viewModel.searchQuery.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
+                            .font(.system(size: 42))
+                            .foregroundColor(.secondary)
+                        Text(viewModel.searchQuery.isEmpty ? "Нет чатов" : "Ничего не найдено")
+                            .font(.system(size: 17, weight: .semibold))
+                        Text(viewModel.searchQuery.isEmpty ? "Здесь появятся ваши личные сообщения" : "Попробуйте изменить запрос")
+                            .font(.system(size: 15))
+                            .foregroundColor(.secondary)
+                    }
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
+                }
+            }
+            .refreshable {
+                if viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    await MainActor.run { showsArchive = true }
+                } else {
+                    await MainActor.run { viewModel.load() }
+                }
+            }
         }
     }
 }
